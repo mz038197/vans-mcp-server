@@ -10,6 +10,15 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
+from mcp.server.auth.middleware.auth_context import AuthContextMiddleware
+from mcp.server.auth.middleware.bearer_auth import (
+    AuthenticatedUser,
+    BearerAuthBackend,
+)
+from starlette.middleware import Middleware
+from starlette.middleware.authentication import AuthenticationMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
+
 from fastmcp.server.auth import AccessToken, TokenVerifier
 
 logger = logging.getLogger(__name__)
@@ -201,3 +210,47 @@ class VcrApiKeyVerifier(TokenVerifier):
                 "auth_mode": "neon",
             },
         )
+
+
+class RequireApiKeyMiddleware:
+    """Reject unauthenticated MCP requests without advertising OAuth.
+
+    FastMCP's built-in RequireAuthMiddleware sends ``WWW-Authenticate: Bearer``,
+    which makes VS Code start Dynamic Client Registration. API-key clients only
+    need a plain 401 so configured ``Authorization`` headers are used instead.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            user = scope.get("user")
+            if not isinstance(user, AuthenticatedUser):
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", b"27"),
+                        ],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b'{"error":"unauthorized"}',
+                    }
+                )
+                return
+        await self.app(scope, receive, send)
+
+
+def api_key_http_middleware(verifier: VcrApiKeyVerifier) -> list[Middleware]:
+    """Starlette middleware stack for Bearer vcr_sk_ without OAuth discovery."""
+    return [
+        Middleware(AuthenticationMiddleware, backend=BearerAuthBackend(verifier)),
+        Middleware(AuthContextMiddleware),
+        Middleware(RequireApiKeyMiddleware),
+    ]

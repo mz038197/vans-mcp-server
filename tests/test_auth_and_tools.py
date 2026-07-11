@@ -107,6 +107,28 @@ def test_mcp_401_does_not_advertise_oauth_metadata(monkeypatch):
             },
         )
         assert res.status_code == 401
-        www = res.headers.get("www-authenticate", "")
-        assert "resource_metadata" not in www.lower()
-        assert "oauth" not in www.lower()
+        assert "www-authenticate" not in {k.lower() for k in res.headers.keys()}
+
+
+def test_mcp_accepts_bypass_key(monkeypatch):
+    app_module = _reload_app(monkeypatch)
+    with TestClient(app_module.app) as client:
+        res = client.post(
+            "/mcp/",
+            headers={
+                "Authorization": "Bearer vcr_sk_dev_local_only",
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "0"},
+                },
+            },
+        )
+        assert res.status_code == 200

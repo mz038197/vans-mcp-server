@@ -11,7 +11,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
-from vans_mcp_server.auth import VcrApiKeyVerifier
+from vans_mcp_server.auth import VcrApiKeyVerifier, api_key_http_middleware
 from vans_mcp_server.tools import knowledge
 from vans_mcp_server.usage import UsageLogger, timed_tool
 
@@ -24,9 +24,10 @@ logger = logging.getLogger("vans_mcp_server")
 usage = UsageLogger.from_env()
 auth = VcrApiKeyVerifier.from_env()
 
+# Do not pass auth= to FastMCP: its RequireAuthMiddleware advertises OAuth via
+# WWW-Authenticate and VS Code enters Dynamic Client Registration.
 mcp = FastMCP(
     "vans_mcp_server",
-    auth=auth,
     instructions=(
         "Vans MCP Portal for Agent Dungeon. "
         "Milestone 1 exposes a course mock Knowledge Portal (Notion-style observe tools)."
@@ -134,6 +135,9 @@ async def health(_request: Request) -> JSONResponse:
 
 # Mount prefix /mcp is the public path; http_app path="/" avoids double-prefixing.
 mcp_app = mcp.http_app(path="/")
+for mw in reversed(api_key_http_middleware(auth)):
+    # Starlette add_middleware: last added runs first on the request.
+    mcp_app.add_middleware(mw.cls, *mw.args, **mw.kwargs)
 
 app = Starlette(
     routes=[
