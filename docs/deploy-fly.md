@@ -18,7 +18,8 @@ notepad "$HOME\.vans-mcp-server\fly.secrets.env"
 | Secret | 說明 |
 |--------|------|
 | `DATABASE_URL` | 與 `vans-coding-router` **同一** Neon connection string |
-| `PUBLIC_URL` | `https://mcp.vanscoding.com` |
+
+`PUBLIC_URL` 放在 `fly.toml` 的 `[env]`，不要設成 Fly secret。
 
 **不要**在 production 設定 `MCP_DEV_BYPASS_KEY`。
 
