@@ -82,3 +82,31 @@ def test_mcp_rejects_bad_key(monkeypatch):
             },
         )
         assert auth.status_code in (401, 403)
+
+
+def test_mcp_401_does_not_advertise_oauth_metadata(monkeypatch):
+    """Clients must use Bearer API keys, not OAuth DCR discovery."""
+    monkeypatch.setenv("PUBLIC_URL", "https://mcp.vanscoding.com")
+    app_module = _reload_app(monkeypatch)
+    with TestClient(app_module.app) as client:
+        res = client.post(
+            "/mcp/",
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "0"},
+                },
+            },
+        )
+        assert res.status_code == 401
+        www = res.headers.get("www-authenticate", "")
+        assert "resource_metadata" not in www.lower()
+        assert "oauth" not in www.lower()

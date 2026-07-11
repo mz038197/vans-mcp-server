@@ -129,16 +129,21 @@ class ApiKeyStore:
 
 
 class VcrApiKeyVerifier(TokenVerifier):
-    """FastMCP auth provider: Bearer vcr_sk_ → Neon api_keys (or local bypass)."""
+    """FastMCP auth provider: Bearer vcr_sk_ → Neon api_keys (or local bypass).
+
+    Intentionally does not set ``base_url`` / resource metadata. Advertising
+    ``resource_metadata`` makes VS Code / Cursor start an OAuth DCR flow and
+    ignore static ``Authorization: Bearer vcr_sk_...`` headers.
+    """
 
     def __init__(
         self,
         *,
         database_url: str | None = None,
         bypass_key: str | None = None,
-        base_url: str | None = None,
     ) -> None:
-        super().__init__(base_url=base_url)
+        # base_url=None → no RFC 9728 resource_metadata on 401 WWW-Authenticate
+        super().__init__(base_url=None)
         self.store = ApiKeyStore(database_url) if database_url else None
         self.bypass_key = normalize_api_key(bypass_key) if bypass_key else ""
 
@@ -147,7 +152,6 @@ class VcrApiKeyVerifier(TokenVerifier):
         return cls(
             database_url=os.environ.get("DATABASE_URL") or None,
             bypass_key=os.environ.get("MCP_DEV_BYPASS_KEY") or None,
-            base_url=os.environ.get("PUBLIC_URL") or None,
         )
 
     async def verify_token(self, token: str) -> AccessToken | None:
