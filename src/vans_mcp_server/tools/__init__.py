@@ -1,1 +1,1 @@
-"""Knowledge Portal tools package."""
+"""MCP Portal tools package."""

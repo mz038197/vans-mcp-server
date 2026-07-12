@@ -18,16 +18,39 @@ notepad "$HOME\.vans-mcp-server\fly.secrets.env"
 | Secret | 說明 |
 |--------|------|
 | `DATABASE_URL` | 與 `vans-coding-router` **同一** Neon connection string |
+| `GOOGLE_CLIENT_ID` | Google OAuth Client（可與 router 共用） |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth Client secret |
+| `SESSION_SECRET` | Connect link state 的 HMAC secret |
+| `OAUTH_TOKEN_ENCRYPTION_KEY` | Fernet key（加密 Google refresh/access token） |
 
 `PUBLIC_URL` 放在 `fly.toml` 的 `[env]`，不要設成 Fly secret。
 
 **不要**在 production 設定 `MCP_DEV_BYPASS_KEY`。
+
+產生 Fernet key：
+
+```powershell
+uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
 
 套用 secrets：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\deploy-fly.ps1 -SecretsOnly
 ```
+
+## Google Cloud Console（Calendar connect）
+
+與 Portal／Dungeon **登入**分開：這是 MCP 的 Calendar 授權。
+
+1. 啟用 **Google Calendar API**
+2. OAuth Consent Screen 加入 scope：`https://www.googleapis.com/auth/calendar`（及 openid/email/profile）
+3. 同一個 OAuth Client 追加 Authorized redirect URIs：
+   - `https://mcp.vanscoding.com/connect/google/callback`
+   - `http://127.0.0.1:8080/connect/google/callback`（本機）
+4. Testing 模式：把學生／測試帳號加進 Test users
+
+學生流程：Agent 呼叫 `google_get_connect_url` → 瀏覽器授權 → 之後可用 `calendar_*` 工具。
 
 ## 部署
 
@@ -64,4 +87,5 @@ curl https://mcp.vanscoding.com/health
 
 - App 分開：`vans-coding-router`（`ai.vanscoding.com`）與 `vans-mcp-server`（`mcp.vanscoding.com`）
 - 共用 Neon：學生同一把 `vcr_sk_` 可打 LLM 與 MCP
-- MCP 只讀 `api_keys` / `users`（與 session/class 過期規則），並可寫 `mcp_usage`
+- MCP 讀 `api_keys` / `users`，寫 `mcp_usage` 與 `mcp_oauth_connections`
+- Google **登入**（router／dungeon）與 Google **Calendar connect**（本服務）刻意分開
