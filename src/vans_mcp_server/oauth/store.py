@@ -160,6 +160,14 @@ class OAuthConnectionStore:
                 (user_id, PROVIDER_GOOGLE),
             ).fetchone()
 
+    def get_granted_scopes(
+        self, user_id: int, provider: str = PROVIDER_GOOGLE
+    ) -> str | None:
+        row = self._load_row(user_id) if provider == PROVIDER_GOOGLE else None
+        if not row:
+            return None
+        return row.get("scopes")
+
     def get_valid_access_token(self, user_id: int) -> StoredGoogleConnection | None:
         row = self._load_row(user_id)
         if not row or not row.get("refresh_token_enc"):

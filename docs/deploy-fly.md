@@ -39,18 +39,24 @@ uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_
 powershell -ExecutionPolicy Bypass -File scripts\deploy-fly.ps1 -SecretsOnly
 ```
 
-## Google Cloud Console（Calendar connect）
+## Google Cloud Console（Calendar + Gmail connect）
 
-與 Portal／Dungeon **登入**分開：這是 MCP 的 Calendar 授權。
+與 Portal／Dungeon **登入**分開：這是 MCP 的 Google Portal 授權（同一組連線含 Calendar 與 Gmail）。
 
-1. 啟用 **Google Calendar API**
-2. OAuth Consent Screen 加入 scope：`https://www.googleapis.com/auth/calendar`（及 openid/email/profile）
+1. 啟用 **Google Calendar API** 與 **Gmail API**
+2. OAuth Consent Screen 加入 scopes：
+   - `https://www.googleapis.com/auth/calendar`
+   - `https://www.googleapis.com/auth/gmail.readonly`
+   - `https://www.googleapis.com/auth/gmail.compose`（含建草稿與寄信）
+   - 以及 openid / email / profile
 3. 同一個 OAuth Client 追加 Authorized redirect URIs：
    - `https://mcp.vanscoding.com/connect/google/callback`
    - `http://127.0.0.1:8080/connect/google/callback`（本機）
 4. Testing 模式：把學生／測試帳號加進 Test users
+5. 若學生先前只授權 Calendar：請再用 `google_get_connect_url` **重連一次**以取得 Gmail scopes
 
-學生流程：Agent 呼叫 `google_get_connect_url` → 瀏覽器授權 → 之後可用 `calendar_*` 工具。
+學生流程：Agent 呼叫 `google_get_connect_url` → 瀏覽器授權 → 可用 `calendar_*` 與 `gmail_*`。  
+`gmail_send_email` 必須 `confirm=true` 才會寄出。
 
 ## 部署
 

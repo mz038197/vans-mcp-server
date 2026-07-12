@@ -18,12 +18,21 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 STATE_MAX_AGE_SECONDS = 600
 
-CALENDAR_SCOPES = (
+CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
+GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
+
+GOOGLE_PORTAL_SCOPES = (
     "openid",
     "email",
     "profile",
-    "https://www.googleapis.com/auth/calendar",
+    CALENDAR_SCOPE,
+    GMAIL_READONLY_SCOPE,
+    GMAIL_COMPOSE_SCOPE,
 )
+
+# Backward-compatible alias (Calendar + Gmail portal scopes).
+CALENDAR_SCOPES = GOOGLE_PORTAL_SCOPES
 
 
 @dataclass(frozen=True)
@@ -36,8 +45,15 @@ class GoogleTokenBundle:
     email: str | None
 
 
+def scopes_include(granted: str | None, required: tuple[str, ...]) -> bool:
+    if not granted:
+        return False
+    have = set(granted.split())
+    return all(scope in have for scope in required)
+
+
 class GoogleOAuthService:
-    """Offline Google OAuth for Calendar connect (not portal login)."""
+    """Offline Google OAuth for Calendar/Gmail connect (not portal login)."""
 
     def __init__(
         self,
@@ -46,7 +62,7 @@ class GoogleOAuthService:
         client_secret: str,
         redirect_uri: str,
         session_secret: str,
-        scopes: tuple[str, ...] = CALENDAR_SCOPES,
+        scopes: tuple[str, ...] = GOOGLE_PORTAL_SCOPES,
     ) -> None:
         self.client_id = client_id.strip()
         self.client_secret = client_secret.strip()

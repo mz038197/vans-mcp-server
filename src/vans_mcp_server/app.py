@@ -15,6 +15,7 @@ from vans_mcp_server.auth import VcrApiKeyVerifier, api_key_http_middleware
 from vans_mcp_server.oauth.google import GoogleOAuthService
 from vans_mcp_server.oauth.store import OAuthConnectionStore
 from vans_mcp_server.tools import calendar as calendar_tools
+from vans_mcp_server.tools import gmail as gmail_tools
 from vans_mcp_server.tools import knowledge
 from vans_mcp_server.usage import UsageLogger, timed_tool
 
@@ -40,8 +41,9 @@ mcp = FastMCP(
     "vans_mcp_server",
     instructions=(
         "Vans MCP Portal for Agent Dungeon. "
-        "Knowledge Portal (course mock Notion observe) and Planning Portal "
-        "(Google Calendar; requires separate /connect/google authorization)."
+        "Knowledge (mock Notion), Planning (Google Calendar), and Communication "
+        "(Gmail search/draft/send). Google tools require /connect/google authorization "
+        "separate from portal login. gmail_send_email requires confirm=true."
     ),
 )
 
@@ -153,7 +155,7 @@ def notion_read_page(page_id: str) -> str:
 @mcp.tool(
     name="google_get_connect_url",
     annotations={
-        "title": "Get Google Calendar connect URL",
+        "title": "Get Google Portal connect URL",
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
@@ -161,10 +163,10 @@ def notion_read_page(page_id: str) -> str:
     },
 )
 def google_get_connect_url() -> str:
-    """Return the browser URL to connect Google Calendar for the current student.
+    """Return the browser URL to connect Google Calendar and Gmail for this student.
 
-    This is separate from portal/dungeon Google login. The student must open the
-    URL once so the server can store their Calendar refresh token.
+    Separate from portal/dungeon Google login. Re-open after scope upgrades
+    (e.g. adding Gmail after a Calendar-only connect).
     """
     timer = timed_tool()
     ok = False
@@ -422,6 +424,281 @@ def calendar_create_event(
         _record("calendar_create_event", ok, timer.latency_ms, err)
 
 
+def _gmail_error_payload(user_id: int, exc: Exception) -> str:
+    connect_url = calendar_tools.build_connect_url(
+        google_oauth, public_url=_public_url(), user_id=user_id
+    )
+    if isinstance(exc, LookupError):
+        return gmail_tools.to_json(
+            calendar_tools.not_connected_payload(
+                connect_url=connect_url,
+                oauth_configured=google_oauth is not None,
+            )
+        )
+    if isinstance(exc, PermissionError):
+        granted = None
+        if oauth_store is not None:
+            granted = oauth_store.get_granted_scopes(user_id)
+        return gmail_tools.to_json(
+            gmail_tools.missing_scopes_payload(
+                connect_url=connect_url, granted=granted
+            )
+        )
+    raise exc
+
+
+@mcp.tool(
+    name="gmail_search_messages",
+    annotations={
+        "title": "Search Gmail messages",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def gmail_search_messages(query: str, max_results: int = 10) -> str:
+    """Search the student's Gmail inbox with a Gmail query string.
+
+    Args:
+        query: Gmail search query (e.g. from:alice newer_than:7d).
+        max_results: Max messages to return (1-25).
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            error_payload, conn = gmail_tools.ensure_gmail_ready(
+                user_id=user_id,
+                store=oauth_store,
+                oauth=google_oauth,
+                public_url=_public_url(),
+            )
+            if error_payload is not None:
+                out = gmail_tools.to_json(error_payload)
+                err = error_payload.get("error")
+            else:
+                assert oauth_store is not None and google_oauth is not None and conn
+                result = gmail_tools.search_messages(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    query=query,
+                    max_results=max_results,
+                )
+                out = gmail_tools.to_json(result)
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _gmail_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("gmail_search_messages", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="gmail_summarize_thread",
+    annotations={
+        "title": "Summarize Gmail thread (structured digest)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def gmail_summarize_thread(thread_id: str, max_messages: int = 10) -> str:
+    """Return a structured digest of a Gmail thread (no server-side LLM).
+
+    Args:
+        thread_id: Gmail thread id (from search results).
+        max_messages: Max messages to include (1-20).
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            error_payload, conn = gmail_tools.ensure_gmail_ready(
+                user_id=user_id,
+                store=oauth_store,
+                oauth=google_oauth,
+                public_url=_public_url(),
+            )
+            if error_payload is not None:
+                out = gmail_tools.to_json(error_payload)
+                err = error_payload.get("error")
+            else:
+                assert oauth_store is not None and google_oauth is not None and conn
+                result = gmail_tools.summarize_thread(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    thread_id=thread_id,
+                    max_messages=max_messages,
+                )
+                out = gmail_tools.to_json(result)
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _gmail_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("gmail_summarize_thread", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="gmail_create_draft",
+    annotations={
+        "title": "Create Gmail draft",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def gmail_create_draft(to: str, subject: str, body: str = "") -> str:
+    """Create a Gmail draft (does not send).
+
+    Args:
+        to: Recipient email address.
+        subject: Email subject.
+        body: Plain-text body.
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            error_payload, conn = gmail_tools.ensure_gmail_ready(
+                user_id=user_id,
+                store=oauth_store,
+                oauth=google_oauth,
+                public_url=_public_url(),
+            )
+            if error_payload is not None:
+                out = gmail_tools.to_json(error_payload)
+                err = error_payload.get("error")
+            else:
+                assert oauth_store is not None and google_oauth is not None and conn
+                result = gmail_tools.create_draft(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    to=to,
+                    subject=subject,
+                    body=body,
+                )
+                out = gmail_tools.to_json(result)
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _gmail_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("gmail_create_draft", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="gmail_send_email",
+    annotations={
+        "title": "Send Gmail message",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def gmail_send_email(
+    to: str,
+    subject: str,
+    body: str = "",
+    confirm: bool = False,
+) -> str:
+    """Send an email from the student's Gmail account.
+
+    Requires confirm=true after human approval. Without confirm, returns
+    confirmation_required and does not send.
+
+    Args:
+        to: Recipient email address.
+        subject: Email subject.
+        body: Plain-text body.
+        confirm: Must be true to actually send.
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            if not confirm:
+                out = gmail_tools.to_json(
+                    gmail_tools.confirmation_required_payload(to=to, subject=subject)
+                )
+                err = "confirmation_required"
+            else:
+                error_payload, conn = gmail_tools.ensure_gmail_ready(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    public_url=_public_url(),
+                )
+                if error_payload is not None:
+                    out = gmail_tools.to_json(error_payload)
+                    err = error_payload.get("error")
+                else:
+                    assert oauth_store is not None and google_oauth is not None and conn
+                    result = gmail_tools.send_email(
+                        user_id=user_id,
+                        store=oauth_store,
+                        oauth=google_oauth,
+                        to=to,
+                        subject=subject,
+                        body=body,
+                        confirm=True,
+                    )
+                    out = gmail_tools.to_json(result)
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _gmail_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("gmail_send_email", ok, timer.latency_ms, err)
+
+
 async def health(_request: Request) -> JSONResponse:
     mode = "neon" if os.environ.get("DATABASE_URL") else "bypass_or_unconfigured"
     return JSONResponse(
@@ -513,9 +790,9 @@ async def connect_google_callback(request: Request) -> HTMLResponse:
     return HTMLResponse(
         """
         <html><body style="font-family: system-ui; max-width: 40rem; margin: 2rem auto;">
-        <h1>Google Calendar connected</h1>
+        <h1>Google Portal connected</h1>
         <p>You can close this tab and return to your agent.
-        Planning Portal tools can now use your calendar.</p>
+        Calendar and Gmail tools can now use your Google account.</p>
         </body></html>
         """,
         status_code=200,

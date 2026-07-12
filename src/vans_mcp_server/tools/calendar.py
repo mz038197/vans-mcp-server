@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-from vans_mcp_server.oauth.google import CALENDAR_SCOPES, GoogleOAuthService
+from vans_mcp_server.oauth.google import GOOGLE_PORTAL_SCOPES, GoogleOAuthService
 from vans_mcp_server.oauth.store import OAuthConnectionStore
 
 DEFAULT_TIMEZONE = "Asia/Taipei"
@@ -26,8 +26,9 @@ def not_connected_payload(
     payload: dict[str, Any] = {
         "error": "not_connected",
         "message": (
-            "Google Calendar is not connected for this user. "
-            "Open connect_url in a browser to authorize (separate from portal login)."
+            "Google Portal is not connected for this user. "
+            "Open connect_url in a browser to authorize Calendar/Gmail "
+            "(separate from portal login)."
         ),
         "oauth_configured": oauth_configured,
     }
@@ -79,9 +80,9 @@ def connection_status(
         "store_configured": True,
         "connect_url": connect_url if not connected else None,
         "message": (
-            "Google Calendar already connected."
+            "Google Portal already connected."
             if connected
-            else "Open connect_url to authorize Google Calendar."
+            else "Open connect_url to authorize Google Calendar and Gmail."
         ),
     }
 
@@ -93,7 +94,7 @@ def _credentials(access_token: str, refresh_token: str | None, oauth: GoogleOAut
         token_uri="https://oauth2.googleapis.com/token",
         client_id=oauth.client_id,
         client_secret=oauth.client_secret,
-        scopes=list(CALENDAR_SCOPES),
+        scopes=list(GOOGLE_PORTAL_SCOPES),
     )
 
 
