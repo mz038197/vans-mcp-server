@@ -48,15 +48,17 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-fly.ps1 -SecretsOnly
    - `https://www.googleapis.com/auth/calendar`
    - `https://www.googleapis.com/auth/gmail.readonly`
    - `https://www.googleapis.com/auth/gmail.compose`（含建草稿與寄信）
+   - `https://www.googleapis.com/auth/gmail.modify`（含移到垃圾桶；非永久刪除）
    - 以及 openid / email / profile
 3. 同一個 OAuth Client 追加 Authorized redirect URIs：
    - `https://mcp.vanscoding.com/connect/google/callback`
    - `http://127.0.0.1:8080/connect/google/callback`（本機）
 4. Testing 模式：把學生／測試帳號加進 Test users
-5. 若學生先前只授權 Calendar：請再用 `google_get_connect_url` **重連一次**以取得 Gmail scopes
+5. 若學生先前只授權部分 Gmail scopes：請再用 `google_get_connect_url` **重連一次**
 
 學生流程：Agent 呼叫 `google_get_connect_url` → 瀏覽器授權 → 可用 `calendar_*` 與 `gmail_*`。  
-`gmail_send_email` 必須 `confirm=true` 才會寄出。
+`gmail_send_email` / `gmail_trash_message` 必須 `confirm=true` 才會執行。  
+篩選信件：用 `gmail_search_messages`（Gmail query）取得 `message_id`，再 trash。
 
 ## 部署
 

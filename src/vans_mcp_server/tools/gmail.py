@@ -11,6 +11,7 @@ from googleapiclient.discovery import build
 
 from vans_mcp_server.oauth.google import (
     GMAIL_COMPOSE_SCOPE,
+    GMAIL_MODIFY_SCOPE,
     GMAIL_READONLY_SCOPE,
     GOOGLE_PORTAL_SCOPES,
     GoogleOAuthService,
@@ -19,7 +20,14 @@ from vans_mcp_server.oauth.google import (
 from vans_mcp_server.oauth.store import OAuthConnectionStore
 from vans_mcp_server.tools import calendar as calendar_tools
 
-GMAIL_REQUIRED_SCOPES = (GMAIL_READONLY_SCOPE, GMAIL_COMPOSE_SCOPE)
+GMAIL_BASE_SCOPES = (
+    GMAIL_READONLY_SCOPE,
+    GMAIL_COMPOSE_SCOPE,
+)
+# Trash (messages.trash) needs modify; read/search/draft/send do not.
+GMAIL_TRASH_SCOPES = (*GMAIL_BASE_SCOPES, GMAIL_MODIFY_SCOPE)
+# Backward-compatible name for base (non-trash) Gmail tools.
+GMAIL_REQUIRED_SCOPES = GMAIL_BASE_SCOPES
 
 
 def to_json(data: dict[str, Any]) -> str:
@@ -30,14 +38,15 @@ def missing_scopes_payload(
     *,
     connect_url: str | None,
     granted: str | None,
+    required: tuple[str, ...] = GMAIL_BASE_SCOPES,
 ) -> dict[str, Any]:
     return {
         "error": "missing_scopes",
         "message": (
-            "Google is connected but Gmail scopes are missing. "
+            "Google is connected but required Gmail scopes are missing. "
             "Open connect_url and re-authorize to grant Gmail access."
         ),
-        "required_scopes": list(GMAIL_REQUIRED_SCOPES),
+        "required_scopes": list(required),
         "granted_scopes": granted,
         "connect_url": connect_url,
     }
@@ -45,19 +54,37 @@ def missing_scopes_payload(
 
 def confirmation_required_payload(
     *,
-    to: str,
-    subject: str,
+    to: str | None = None,
+    subject: str | None = None,
+    message_id: str | None = None,
+    action: str = "send",
 ) -> dict[str, Any]:
-    return {
-        "error": "confirmation_required",
-        "message": (
+    if action == "trash":
+        message = (
+            "Refusing to move message to trash without confirm=true. "
+            "Ask the human to confirm, then call again with confirm=true."
+        )
+    else:
+        message = (
             "Refusing to send email without confirm=true. "
             "Ask the human to confirm, then call again with confirm=true."
-        ),
-        "to": to,
-        "subject": subject,
-        "sent": False,
+        )
+    payload: dict[str, Any] = {
+        "error": "confirmation_required",
+        "message": message,
+        "action": action,
     }
+    if to is not None:
+        payload["to"] = to
+    if subject is not None:
+        payload["subject"] = subject
+    if message_id is not None:
+        payload["message_id"] = message_id
+    if action == "send":
+        payload["sent"] = False
+    if action == "trash":
+        payload["trashed"] = False
+    return payload
 
 
 def _credentials(
@@ -130,6 +157,7 @@ def ensure_gmail_ready(
     store: OAuthConnectionStore | None,
     oauth: GoogleOAuthService | None,
     public_url: str,
+    required_scopes: tuple[str, ...] = GMAIL_BASE_SCOPES,
 ) -> tuple[dict[str, Any] | None, Any]:
     """Return (error_payload, connection) — connection is StoredGoogleConnection when OK."""
     oauth_ok = oauth is not None and oauth.is_configured()
@@ -158,9 +186,13 @@ def ensure_gmail_ready(
             ),
             None,
         )
-    if not scopes_include(conn.scopes, GMAIL_REQUIRED_SCOPES):
+    if not scopes_include(conn.scopes, required_scopes):
         return (
-            missing_scopes_payload(connect_url=connect_url, granted=conn.scopes),
+            missing_scopes_payload(
+                connect_url=connect_url,
+                granted=conn.scopes,
+                required=required_scopes,
+            ),
             None,
         )
     return None, conn
@@ -177,7 +209,7 @@ def search_messages(
     conn = store.get_valid_access_token(user_id)
     if conn is None:
         raise LookupError("not_connected")
-    if not scopes_include(conn.scopes, GMAIL_REQUIRED_SCOPES):
+    if not scopes_include(conn.scopes, GMAIL_BASE_SCOPES):
         raise PermissionError("missing_scopes")
 
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
@@ -236,7 +268,7 @@ def summarize_thread(
     conn = store.get_valid_access_token(user_id)
     if conn is None:
         raise LookupError("not_connected")
-    if not scopes_include(conn.scopes, GMAIL_REQUIRED_SCOPES):
+    if not scopes_include(conn.scopes, GMAIL_BASE_SCOPES):
         raise PermissionError("missing_scopes")
 
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
@@ -297,7 +329,7 @@ def create_draft(
     conn = store.get_valid_access_token(user_id)
     if conn is None:
         raise LookupError("not_connected")
-    if not scopes_include(conn.scopes, GMAIL_REQUIRED_SCOPES):
+    if not scopes_include(conn.scopes, GMAIL_BASE_SCOPES):
         raise PermissionError("missing_scopes")
     if not (to or "").strip():
         raise ValueError("to is required")
@@ -334,11 +366,11 @@ def send_email(
     confirm: bool = False,
 ) -> dict[str, Any]:
     if not confirm:
-        return confirmation_required_payload(to=to, subject=subject)
+        return confirmation_required_payload(to=to, subject=subject, action="send")
     conn = store.get_valid_access_token(user_id)
     if conn is None:
         raise LookupError("not_connected")
-    if not scopes_include(conn.scopes, GMAIL_REQUIRED_SCOPES):
+    if not scopes_include(conn.scopes, GMAIL_BASE_SCOPES):
         raise PermissionError("missing_scopes")
     if not (to or "").strip():
         raise ValueError("to is required")
@@ -356,3 +388,37 @@ def send_email(
         "subject": subject,
         "source": "gmail",
     }
+
+
+def trash_message(
+    *,
+    user_id: int,
+    store: OAuthConnectionStore,
+    oauth: GoogleOAuthService,
+    message_id: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Move a message to Trash (not permanent delete)."""
+    mid = (message_id or "").strip()
+    if not confirm:
+        return confirmation_required_payload(message_id=mid, action="trash")
+    conn = store.get_valid_access_token(user_id)
+    if conn is None:
+        raise LookupError("not_connected")
+    if not scopes_include(conn.scopes, GMAIL_TRASH_SCOPES):
+        raise PermissionError("missing_scopes")
+    if not mid:
+        raise ValueError("message_id is required")
+
+    creds = _credentials(conn.access_token, conn.refresh_token, oauth)
+    service = _gmail_service(creds)
+    result = service.users().messages().trash(userId="me", id=mid).execute()
+    return {
+        "trashed": True,
+        "id": result.get("id") or mid,
+        "threadId": result.get("threadId"),
+        "labelIds": result.get("labelIds"),
+        "source": "gmail",
+        "note": "Moved to Trash. Not permanently deleted.",
+    }
+

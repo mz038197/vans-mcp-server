@@ -21,6 +21,7 @@ STATE_MAX_AGE_SECONDS = 600
 CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
+GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 
 GOOGLE_PORTAL_SCOPES = (
     "openid",
@@ -29,6 +30,7 @@ GOOGLE_PORTAL_SCOPES = (
     CALENDAR_SCOPE,
     GMAIL_READONLY_SCOPE,
     GMAIL_COMPOSE_SCOPE,
+    GMAIL_MODIFY_SCOPE,
 )
 
 # Backward-compatible alias (Calendar + Gmail portal scopes).

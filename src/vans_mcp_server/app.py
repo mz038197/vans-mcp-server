@@ -43,7 +43,8 @@ mcp = FastMCP(
         "Vans MCP Portal for Agent Dungeon. "
         "Knowledge (mock Notion), Planning (Google Calendar), and Communication "
         "(Gmail search/draft/send). Google tools require /connect/google authorization "
-        "separate from portal login. gmail_send_email requires confirm=true."
+        "separate from portal login. gmail_send_email and gmail_trash_message "
+        "require confirm=true."
     ),
 )
 
@@ -697,6 +698,76 @@ def gmail_send_email(
         raise
     finally:
         _record("gmail_send_email", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="gmail_trash_message",
+    annotations={
+        "title": "Move Gmail message to Trash",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def gmail_trash_message(message_id: str, confirm: bool = False) -> str:
+    """Move a Gmail message to Trash (not permanent delete).
+
+    Typical flow: gmail_search_messages to find ids, then trash with confirm=true
+    after human approval.
+
+    Args:
+        message_id: Gmail message id from search results.
+        confirm: Must be true to actually move to Trash.
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            if not confirm:
+                out = gmail_tools.to_json(
+                    gmail_tools.confirmation_required_payload(
+                        message_id=message_id, action="trash"
+                    )
+                )
+                err = "confirmation_required"
+            else:
+                error_payload, conn = gmail_tools.ensure_gmail_ready(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    public_url=_public_url(),
+                    required_scopes=gmail_tools.GMAIL_TRASH_SCOPES,
+                )
+                if error_payload is not None:
+                    out = gmail_tools.to_json(error_payload)
+                    err = error_payload.get("error")
+                else:
+                    assert oauth_store is not None and google_oauth is not None and conn
+                    result = gmail_tools.trash_message(
+                        user_id=user_id,
+                        store=oauth_store,
+                        oauth=google_oauth,
+                        message_id=message_id,
+                        confirm=True,
+                    )
+                    out = gmail_tools.to_json(result)
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _gmail_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("gmail_trash_message", ok, timer.latency_ms, err)
 
 
 async def health(_request: Request) -> JSONResponse:
