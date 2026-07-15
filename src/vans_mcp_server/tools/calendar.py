@@ -290,3 +290,101 @@ def create_event(
         "end": created.get("end"),
         "source": "google_calendar",
     }
+
+
+def confirmation_required_payload(*, event_id: str, action: str = "delete") -> dict[str, Any]:
+    return {
+        "error": "confirmation_required",
+        "message": (
+            "Refusing to delete calendar event without confirm=true. "
+            "Ask the human to confirm, then call again with confirm=true."
+        ),
+        "action": action,
+        "event_id": event_id,
+        "deleted": False,
+    }
+
+
+def update_event(
+    *,
+    user_id: int,
+    store: OAuthConnectionStore,
+    oauth: GoogleOAuthService,
+    event_id: str,
+    summary: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    description: str | None = None,
+    timezone_name: str = DEFAULT_TIMEZONE,
+) -> dict[str, Any]:
+    """Patch fields on an existing primary-calendar event."""
+    eid = (event_id or "").strip()
+    if not eid:
+        raise ValueError("event_id is required")
+    has_start = start is not None and str(start).strip() != ""
+    has_end = end is not None and str(end).strip() != ""
+    if has_start != has_end:
+        raise ValueError("start and end must both be provided when changing time")
+    body: dict[str, Any] = {}
+    if summary is not None:
+        if not str(summary).strip():
+            raise ValueError("summary cannot be empty")
+        body["summary"] = str(summary).strip()
+    if description is not None:
+        body["description"] = description
+    if has_start and has_end:
+        start_dt = _parse_in_timezone(str(start), timezone_name)
+        end_dt = _parse_in_timezone(str(end), timezone_name)
+        body["start"] = _event_datetime_payload(start_dt, timezone_name)
+        body["end"] = _event_datetime_payload(end_dt, timezone_name)
+    if not body:
+        raise ValueError("provide at least one of summary, start/end, description")
+
+    conn = store.get_valid_access_token(user_id)
+    if conn is None:
+        raise LookupError("not_connected")
+    creds = _credentials(conn.access_token, conn.refresh_token, oauth)
+    service = _calendar_service(creds)
+    updated = (
+        service.events()
+        .patch(calendarId="primary", eventId=eid, body=body)
+        .execute()
+    )
+    return {
+        "updated": True,
+        "id": updated.get("id") or eid,
+        "summary": updated.get("summary"),
+        "htmlLink": updated.get("htmlLink"),
+        "start": updated.get("start"),
+        "end": updated.get("end"),
+        "status": updated.get("status"),
+        "source": "google_calendar",
+    }
+
+
+def delete_event(
+    *,
+    user_id: int,
+    store: OAuthConnectionStore,
+    oauth: GoogleOAuthService,
+    event_id: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Delete an event from the primary calendar. Requires confirm=true."""
+    eid = (event_id or "").strip()
+    if not eid:
+        raise ValueError("event_id is required")
+    if not confirm:
+        return confirmation_required_payload(event_id=eid, action="delete")
+
+    conn = store.get_valid_access_token(user_id)
+    if conn is None:
+        raise LookupError("not_connected")
+    creds = _credentials(conn.access_token, conn.refresh_token, oauth)
+    service = _calendar_service(creds)
+    service.events().delete(calendarId="primary", eventId=eid).execute()
+    return {
+        "deleted": True,
+        "id": eid,
+        "source": "google_calendar",
+    }

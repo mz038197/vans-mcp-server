@@ -200,6 +200,148 @@ def test_get_valid_access_token_expires_at_uses_post_refresh_now(monkeypatch):
     upsert.assert_called_once()
 
 
+def test_update_event_patches_summary_and_time():
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    store = MagicMock()
+    store.get_valid_access_token.return_value = MagicMock(
+        access_token="access",
+        refresh_token="refresh",
+    )
+    fake_service = MagicMock()
+    fake_service.events.return_value.patch.return_value.execute.return_value = {
+        "id": "evt1",
+        "summary": "Revised",
+        "htmlLink": "https://calendar.google.com/event?eid=1",
+        "start": {"dateTime": "2026-07-12T16:00:00", "timeZone": "Asia/Taipei"},
+        "end": {"dateTime": "2026-07-12T17:00:00", "timeZone": "Asia/Taipei"},
+        "status": "confirmed",
+    }
+
+    with patch("vans_mcp_server.tools.calendar._calendar_service", return_value=fake_service):
+        result = calendar_tools.update_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            event_id="evt1",
+            summary="Revised",
+            start="2026-07-12T16:00:00",
+            end="2026-07-12T17:00:00",
+            timezone_name="Asia/Taipei",
+        )
+
+    assert result["updated"] is True
+    assert result["id"] == "evt1"
+    kwargs = fake_service.events.return_value.patch.call_args.kwargs
+    assert kwargs["eventId"] == "evt1"
+    assert kwargs["body"]["summary"] == "Revised"
+    assert kwargs["body"]["start"] == {
+        "dateTime": "2026-07-12T16:00:00",
+        "timeZone": "Asia/Taipei",
+    }
+
+
+def test_update_event_rejects_partial_time_and_empty_body():
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    store = MagicMock()
+    with pytest.raises(ValueError, match="start and end"):
+        calendar_tools.update_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            event_id="evt1",
+            start="2026-07-12T16:00:00",
+        )
+    with pytest.raises(ValueError, match="at least one"):
+        calendar_tools.update_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            event_id="evt1",
+        )
+    store.get_valid_access_token.assert_not_called()
+
+
+def test_delete_event_requires_confirm():
+    store = MagicMock()
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    result = calendar_tools.delete_event(
+        user_id=1,
+        store=store,
+        oauth=oauth,
+        event_id="evt1",
+        confirm=False,
+    )
+    assert result["error"] == "confirmation_required"
+    assert result["deleted"] is False
+    assert result["event_id"] == "evt1"
+    store.get_valid_access_token.assert_not_called()
+
+
+def test_delete_event_rejects_empty_id_before_confirm():
+    store = MagicMock()
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    with pytest.raises(ValueError, match="event_id is required"):
+        calendar_tools.delete_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            event_id="   ",
+            confirm=False,
+        )
+    store.get_valid_access_token.assert_not_called()
+
+
+def test_delete_event_with_confirm():
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    store = MagicMock()
+    store.get_valid_access_token.return_value = MagicMock(
+        access_token="access",
+        refresh_token="refresh",
+    )
+    fake_service = MagicMock()
+    fake_service.events.return_value.delete.return_value.execute.return_value = None
+
+    with patch("vans_mcp_server.tools.calendar._calendar_service", return_value=fake_service):
+        result = calendar_tools.delete_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            event_id="evt1",
+            confirm=True,
+        )
+
+    assert result["deleted"] is True
+    assert result["id"] == "evt1"
+    kwargs = fake_service.events.return_value.delete.call_args.kwargs
+    assert kwargs["calendarId"] == "primary"
+    assert kwargs["eventId"] == "evt1"
+
+
 def test_find_free_time_gap_logic():
     oauth = GoogleOAuthService(
         client_id="cid",

@@ -43,8 +43,8 @@ mcp = FastMCP(
         "Vans MCP Portal for Agent Dungeon. "
         "Knowledge (mock Notion), Planning (Google Calendar), and Communication "
         "(Gmail search/draft/send). Google tools require /connect/google authorization "
-        "separate from portal login. gmail_send_email and gmail_trash_message "
-        "require confirm=true."
+        "separate from portal login. gmail_send_email, gmail_trash_message, and "
+        "calendar_delete_event require confirm=true."
     ),
 )
 
@@ -423,6 +423,157 @@ def calendar_create_event(
         raise
     finally:
         _record("calendar_create_event", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="calendar_update_event",
+    annotations={
+        "title": "Update Google Calendar event",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def calendar_update_event(
+    event_id: str,
+    summary: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    description: str | None = None,
+    timezone_name: str = "Asia/Taipei",
+) -> str:
+    """Update fields on an existing primary-calendar event.
+
+    Provide at least one of summary, start/end (both required together), or
+    description. event_id comes from calendar_list_events or calendar_create_event.
+
+    Args:
+        event_id: Google Calendar event id.
+        summary: New title (omit to leave unchanged).
+        start: New start datetime ISO-8601 (must pair with end).
+        end: New end datetime ISO-8601 (must pair with start).
+        description: New description (omit to leave unchanged; pass "" to clear).
+        timezone_name: IANA timezone for start/end (default Asia/Taipei).
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            blocked = _calendar_guard_or_payload(user_id)
+            if blocked is not None:
+                out = blocked
+            else:
+                assert oauth_store is not None and google_oauth is not None
+                result = calendar_tools.update_event(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    event_id=event_id,
+                    summary=summary,
+                    start=start,
+                    end=end,
+                    description=description,
+                    timezone_name=timezone_name,
+                )
+                out = calendar_tools.to_json(result)
+        ok = True
+        return out
+    except LookupError:
+        err = "not_connected"
+        user_id = _user_id() or 0
+        out = calendar_tools.to_json(
+            calendar_tools.not_connected_payload(
+                connect_url=calendar_tools.build_connect_url(
+                    google_oauth, public_url=_public_url(), user_id=user_id
+                ),
+                oauth_configured=google_oauth is not None,
+            )
+        )
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("calendar_update_event", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="calendar_delete_event",
+    annotations={
+        "title": "Delete Google Calendar event",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def calendar_delete_event(event_id: str, confirm: bool = False) -> str:
+    """Delete an event from the student's primary Google Calendar.
+
+    Requires confirm=true after human approval. Without confirm, returns
+    confirmation_required and does not delete. Typical flow: calendar_list_events
+    to find ids, then delete with confirm=true.
+
+    Args:
+        event_id: Google Calendar event id from list/create results.
+        confirm: Must be true to actually delete.
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            eid = (event_id or "").strip()
+            if not eid:
+                raise ValueError("event_id is required")
+            if not confirm:
+                out = calendar_tools.to_json(
+                    calendar_tools.confirmation_required_payload(
+                        event_id=eid, action="delete"
+                    )
+                )
+                err = "confirmation_required"
+            else:
+                blocked = _calendar_guard_or_payload(user_id)
+                if blocked is not None:
+                    out = blocked
+                else:
+                    assert oauth_store is not None and google_oauth is not None
+                    result = calendar_tools.delete_event(
+                        user_id=user_id,
+                        store=oauth_store,
+                        oauth=google_oauth,
+                        event_id=eid,
+                        confirm=True,
+                    )
+                    out = calendar_tools.to_json(result)
+        ok = True
+        return out
+    except LookupError:
+        err = "not_connected"
+        user_id = _user_id() or 0
+        out = calendar_tools.to_json(
+            calendar_tools.not_connected_payload(
+                connect_url=calendar_tools.build_connect_url(
+                    google_oauth, public_url=_public_url(), user_id=user_id
+                ),
+                oauth_configured=google_oauth is not None,
+            )
+        )
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("calendar_delete_event", ok, timer.latency_ms, err)
 
 
 def _gmail_error_payload(user_id: int, exc: Exception) -> str:

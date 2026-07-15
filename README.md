@@ -3,10 +3,10 @@
 Vans MCP Portal server for Agent Dungeon. HTTP MCP Gateway at `mcp.vanscoding.com`.
 
 - Milestone 1: `vcr_sk_` auth + course mock Knowledge Portal (`notion_search_pages`, `notion_read_page`)
-- Milestone 3: Google Calendar Planning Portal (`google_get_connect_url`, `calendar_*`)
+- Milestone 3: Google Calendar Planning Portal (`google_get_connect_url`, `calendar_list_events`, `calendar_find_free_time`, `calendar_create_event`, `calendar_update_event`, `calendar_delete_event`)
 - Milestone 4: Gmail Communication Portal (`gmail_search_messages`, `gmail_summarize_thread`, `gmail_create_draft`, `gmail_send_email`, `gmail_trash_message`)
 
-Google connect is **separate from** portal/dungeon Google login. One connect grants Calendar + Gmail scopes. `gmail_send_email` and `gmail_trash_message` require `confirm=true`. Filter messages with `gmail_search_messages` (Gmail query), then trash by id.
+Google connect is **separate from** portal/dungeon Google login. One connect grants Calendar + Gmail scopes. `gmail_send_email`, `gmail_trash_message`, and `calendar_delete_event` require `confirm=true`. Filter messages with `gmail_search_messages` (Gmail query), then trash by id.
 
 Student client package `peas-agent-mcp` is a separate project (not this repo).
 
