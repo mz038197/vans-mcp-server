@@ -20,10 +20,10 @@ notepad "$HOME\.vans-mcp-server\fly.secrets.env"
 | `DATABASE_URL` | 與 `vans-coding-router` **同一** Neon connection string |
 | `GOOGLE_CLIENT_ID` | Google OAuth Client（可與 router 共用） |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth Client secret |
-| `SESSION_SECRET` | Connect link state 的 HMAC secret |
-| `OAUTH_TOKEN_ENCRYPTION_KEY` | Fernet key（加密 Google refresh/access token） |
+| `SESSION_SECRET` | Connect link state 的 HMAC secret（Google + Discord 共用） |
+| `OAUTH_TOKEN_ENCRYPTION_KEY` | Fernet key（加密 Google tokens 與 Discord bot tokens） |
 
-`PUBLIC_URL` 放在 `fly.toml` 的 `[env]`，不要設成 Fly secret。
+`PUBLIC_URL` 與 `DISCORD_GUILD_ID` 放在 `fly.toml` 的 `[env]`，不要設成 Fly secret。
 
 **不要**在 production 設定 `MCP_DEV_BYPASS_KEY`。
 
@@ -59,6 +59,16 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-fly.ps1 -SecretsOnly
 學生流程：Agent 呼叫 `google_get_connect_url` → 瀏覽器授權 → 可用 `calendar_*` 與 `gmail_*`。  
 `gmail_send_email` / `gmail_trash_message` 必須 `confirm=true` 才會執行。  
 篩選信件：用 `gmail_search_messages`（Gmail query）取得 `message_id`，再 trash。
+
+## Discord 課堂群組（學生自有 Bot）
+
+每位學生建立 **自己的** Discord Application + Bot（非共用一台課務 Bot）。
+
+1. 在 `fly.toml` `[env]` 設定課堂伺服器 `DISCORD_GUILD_ID`
+2. 學生：Discord Developer Portal 建立 Bot → Agent 呼叫 `discord_get_connect_url` → 瀏覽器貼上 Application ID + Bot Token（**勿貼進聊天**）→ 用成功頁的 invite 連結把 Bot 加入課堂伺服器
+3. 可用 `discord_list_channels` / `discord_read_messages` / `discord_send_message`（send 需 `confirm=true`）
+4. 若要讀訊息內文：在 Developer Portal 開啟 Bot 的 **Message Content Intent**
+5. 結課：請學生在 Developer Portal **Reset Token**；可另清 Neon 中 `provider=discord_bot` 列
 
 ## 部署
 

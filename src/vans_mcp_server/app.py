@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
+from html import escape
 from typing import Any
 
+import httpx
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
 from starlette.applications import Starlette
@@ -12,9 +14,11 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 
 from vans_mcp_server.auth import VcrApiKeyVerifier, api_key_http_middleware
+from vans_mcp_server.oauth.discord_connect import DiscordConnectState
 from vans_mcp_server.oauth.google import GoogleOAuthService
 from vans_mcp_server.oauth.store import OAuthConnectionStore
 from vans_mcp_server.tools import calendar as calendar_tools
+from vans_mcp_server.tools import discord as discord_tools
 from vans_mcp_server.tools import gmail as gmail_tools
 from vans_mcp_server.tools import knowledge
 from vans_mcp_server.usage import UsageLogger, timed_tool
@@ -29,6 +33,7 @@ usage = UsageLogger.from_env()
 auth = VcrApiKeyVerifier.from_env()
 google_oauth = GoogleOAuthService.from_env()
 oauth_store = OAuthConnectionStore.from_env(oauth=google_oauth)
+discord_connect = DiscordConnectState.from_env()
 
 
 def _public_url() -> str:
@@ -42,9 +47,12 @@ mcp = FastMCP(
     instructions=(
         "Vans MCP Portal for Agent Dungeon. "
         "Knowledge (mock Notion), Planning (Google Calendar), and Communication "
-        "(Gmail search/draft/send). Google tools require /connect/google authorization "
-        "separate from portal login. gmail_send_email, gmail_trash_message, and "
-        "calendar_delete_event require confirm=true."
+        "(Gmail search/draft/send; Discord classroom bot list/read/send). "
+        "Google tools require /connect/google authorization separate from portal login. "
+        "Discord uses each student's own bot: discord_get_connect_url (paste token in "
+        "browser, never in chat), then invite bot to the classroom guild. "
+        "gmail_send_email, gmail_trash_message, calendar_delete_event, and "
+        "discord_send_message require confirm=true."
     ),
 )
 
@@ -921,6 +929,221 @@ def gmail_trash_message(message_id: str, confirm: bool = False) -> str:
         _record("gmail_trash_message", ok, timer.latency_ms, err)
 
 
+def _discord_error_payload(user_id: int, exc: Exception) -> str:
+    connect_url = discord_tools.build_connect_url(
+        discord_connect, public_url=_public_url(), user_id=user_id
+    )
+    if isinstance(exc, RuntimeError) and str(exc) == "not_configured":
+        return discord_tools.to_json(discord_tools.not_configured_payload())
+    return discord_tools.to_json(
+        discord_tools.not_connected_payload(
+            connect_url=connect_url,
+            store_configured=oauth_store is not None,
+            state_configured=bool(
+                discord_connect is not None and discord_connect.is_configured()
+            ),
+        )
+    )
+
+
+@mcp.tool(
+    name="discord_get_connect_url",
+    annotations={
+        "title": "Get Discord bot connect URL",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def discord_get_connect_url() -> str:
+    """Return the browser URL to register this student's Discord bot token.
+
+    Student creates an Application + Bot in Discord Developer Portal, opens
+    connect_url, pastes Application ID and Bot Token (never paste the token
+    into chat), then uses the invite_url to add the bot to the classroom server.
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            result = discord_tools.connection_status(
+                user_id=user_id,
+                store=oauth_store,
+                state_svc=discord_connect,
+                public_url=_public_url(),
+            )
+            out = discord_tools.to_json(result)
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("discord_get_connect_url", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="discord_list_channels",
+    annotations={
+        "title": "List classroom Discord text channels",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def discord_list_channels() -> str:
+    """List text channels in the classroom Discord server using the student's bot.
+
+    Requires discord_get_connect_url flow and bot invite into DISCORD_GUILD_ID.
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            result = discord_tools.list_channels(user_id=user_id, store=oauth_store)
+            out = discord_tools.to_json(result)
+            if result.get("error"):
+                err = str(result["error"])
+        ok = True
+        return out
+    except (LookupError, RuntimeError) as exc:
+        user_id = _user_id() or 0
+        out = _discord_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("discord_list_channels", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="discord_read_messages",
+    annotations={
+        "title": "Read Discord channel messages",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def discord_read_messages(channel_id: str, limit: int = 20) -> str:
+    """Read recent messages from a classroom Discord text channel.
+
+    Channel must belong to DISCORD_GUILD_ID. Enable Message Content Intent on
+    the bot application if message text is empty.
+
+    Args:
+        channel_id: Channel id from discord_list_channels.
+        limit: Max messages to return (1-100, default 20).
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            result = discord_tools.read_messages(
+                user_id=user_id,
+                store=oauth_store,
+                channel_id=channel_id,
+                limit=limit,
+            )
+            out = discord_tools.to_json(result)
+            if result.get("error"):
+                err = str(result["error"])
+        ok = True
+        return out
+    except (LookupError, RuntimeError) as exc:
+        user_id = _user_id() or 0
+        out = _discord_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("discord_read_messages", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="discord_send_message",
+    annotations={
+        "title": "Send Discord channel message",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def discord_send_message(
+    channel_id: str, content: str, confirm: bool = False
+) -> str:
+    """Send a message to a classroom Discord channel as the student's bot.
+
+    Requires confirm=true after human approval. Without confirm, returns
+    confirmation_required and does not send.
+
+    Args:
+        channel_id: Channel id from discord_list_channels.
+        content: Message text to send.
+        confirm: Must be true to actually send.
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            cid = (channel_id or "").strip()
+            if not cid:
+                raise ValueError("channel_id is required")
+            if not confirm:
+                out = discord_tools.to_json(
+                    discord_tools.confirmation_required_payload(
+                        channel_id=cid, content=content or ""
+                    )
+                )
+                err = "confirmation_required"
+            else:
+                result = discord_tools.send_message(
+                    user_id=user_id,
+                    store=oauth_store,
+                    channel_id=cid,
+                    content=content,
+                    confirm=True,
+                )
+                out = discord_tools.to_json(result)
+                if result.get("error"):
+                    err = str(result["error"])
+        ok = True
+        return out
+    except (LookupError, RuntimeError) as exc:
+        user_id = _user_id() or 0
+        out = _discord_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("discord_send_message", ok, timer.latency_ms, err)
+
+
 async def health(_request: Request) -> JSONResponse:
     mode = "neon" if os.environ.get("DATABASE_URL") else "bypass_or_unconfigured"
     return JSONResponse(
@@ -933,6 +1156,10 @@ async def health(_request: Request) -> JSONResponse:
                 google_oauth is not None and google_oauth.is_configured()
             ),
             "oauth_store_configured": oauth_store is not None,
+            "discord_guild_configured": discord_tools.guild_configured(),
+            "discord_connect_configured": bool(
+                discord_connect is not None and discord_connect.is_configured()
+            ),
         }
     )
 
@@ -1021,6 +1248,147 @@ async def connect_google_callback(request: Request) -> HTMLResponse:
     )
 
 
+async def connect_discord_start(request: Request) -> HTMLResponse:
+    if discord_connect is None or not discord_connect.is_configured():
+        return HTMLResponse(
+            "<h1>Discord connect not configured</h1>"
+            "<p>Set SESSION_SECRET on the server.</p>",
+            status_code=503,
+        )
+    if not discord_tools.guild_configured():
+        return HTMLResponse(
+            "<h1>Classroom Discord not configured</h1>"
+            "<p>Set DISCORD_GUILD_ID on the server.</p>",
+            status_code=503,
+        )
+    if oauth_store is None:
+        return HTMLResponse(
+            "<h1>OAuth store not configured</h1>"
+            "<p>DATABASE_URL and OAUTH_TOKEN_ENCRYPTION_KEY are required.</p>",
+            status_code=503,
+        )
+    state = request.query_params.get("state") or ""
+    user_id = discord_connect.verify_connect_state(state)
+    if user_id is None:
+        return HTMLResponse(
+            "<h1>Invalid or expired connect link</h1>"
+            "<p>Ask your agent for a new discord_get_connect_url.</p>",
+            status_code=400,
+        )
+    # Re-sign so the form POST state is fresh and still bound to the same user.
+    fresh_state = discord_connect.create_connect_state(user_id)
+    guild_id = escape(discord_tools.classroom_guild_id() or "")
+    safe_state = escape(fresh_state, quote=True)
+    return HTMLResponse(
+        f"""
+        <html><body style="font-family: system-ui; max-width: 40rem; margin: 2rem auto;">
+        <h1>Connect your Discord bot</h1>
+        <p>Create an Application + Bot in the
+        <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">
+        Discord Developer Portal</a>, then paste the values below.
+        <strong>Never paste your Bot Token into chat.</strong></p>
+        <p>Classroom guild id: <code>{guild_id}</code></p>
+        <form method="post" action="/connect/discord/submit">
+          <input type="hidden" name="state" value="{safe_state}" />
+          <p>
+            <label>Application ID<br/>
+              <input name="application_id" required style="width:100%;" autocomplete="off" />
+            </label>
+          </p>
+          <p>
+            <label>Bot Token<br/>
+              <input name="bot_token" type="password" required style="width:100%;" autocomplete="off" />
+            </label>
+          </p>
+          <p><button type="submit">Save bot connection</button></p>
+        </form>
+        </body></html>
+        """,
+        status_code=200,
+    )
+
+
+async def connect_discord_submit(request: Request) -> HTMLResponse:
+    if discord_connect is None or not discord_connect.is_configured():
+        return HTMLResponse(
+            "<h1>Discord connect not configured</h1>",
+            status_code=503,
+        )
+    if not discord_tools.guild_configured():
+        return HTMLResponse(
+            "<h1>Classroom Discord not configured</h1>"
+            "<p>Set DISCORD_GUILD_ID on the server.</p>",
+            status_code=503,
+        )
+    if oauth_store is None:
+        return HTMLResponse(
+            "<h1>OAuth store not configured</h1>"
+            "<p>DATABASE_URL and OAUTH_TOKEN_ENCRYPTION_KEY are required.</p>",
+            status_code=503,
+        )
+
+    form = await request.form()
+    state = str(form.get("state") or "")
+    application_id = str(form.get("application_id") or "").strip()
+    bot_token = str(form.get("bot_token") or "").strip()
+    user_id = discord_connect.verify_connect_state(state)
+    if user_id is None:
+        return HTMLResponse(
+            "<h1>Invalid or expired state</h1>"
+            "<p>Please request a new connect URL from your agent.</p>",
+            status_code=400,
+        )
+    if not application_id or not bot_token:
+        return HTMLResponse(
+            "<h1>Missing Application ID or Bot Token</h1>",
+            status_code=400,
+        )
+
+    try:
+        me = discord_tools.verify_bot_token(bot_token)
+        bot_user_id = str(me.get("id") or "") or None
+        oauth_store.upsert_discord_bot_token(
+            user_id=user_id,
+            bot_token=bot_token,
+            application_id=application_id,
+            bot_user_id=bot_user_id,
+        )
+    except httpx.HTTPStatusError:
+        logger.warning("discord bot token verify failed user_id=%s", user_id)
+        return HTMLResponse(
+            "<h1>Invalid Bot Token</h1>"
+            "<p>Discord rejected the token. Reset the token in the Developer Portal "
+            "if needed, then try again with a fresh connect link.</p>",
+            status_code=400,
+        )
+    except Exception:
+        logger.exception("discord connect submit failed user_id=%s", user_id)
+        return HTMLResponse(
+            "<h1>Failed to save Discord bot connection</h1>"
+            "<p>Check server logs and try again.</p>",
+            status_code=500,
+        )
+
+    guild_id = discord_tools.classroom_guild_id() or ""
+    invite_url = discord_tools.build_invite_url(
+        application_id=application_id, guild_id=guild_id
+    )
+    safe_invite = escape(invite_url, quote=True)
+    return HTMLResponse(
+        f"""
+        <html><body style="font-family: system-ui; max-width: 40rem; margin: 2rem auto;">
+        <h1>Discord bot connected</h1>
+        <p>Token saved. Next: add the bot to the classroom server:</p>
+        <p><a href="{safe_invite}">Invite bot to classroom guild</a></p>
+        <p>Then return to your agent and use discord_list_channels /
+        discord_read_messages / discord_send_message.</p>
+        <p>At course end, reset the Bot Token in the Developer Portal.</p>
+        </body></html>
+        """,
+        status_code=200,
+    )
+
+
 # Mount prefix /mcp is the public path; http_app path="/" avoids double-prefixing.
 mcp_app = mcp.http_app(path="/")
 for mw in reversed(api_key_http_middleware(auth)):
@@ -1032,6 +1400,8 @@ app = Starlette(
         Route("/health", health, methods=["GET"]),
         Route("/connect/google/start", connect_google_start, methods=["GET"]),
         Route("/connect/google/callback", connect_google_callback, methods=["GET"]),
+        Route("/connect/discord/start", connect_discord_start, methods=["GET"]),
+        Route("/connect/discord/submit", connect_discord_submit, methods=["POST"]),
         Mount("/mcp", app=mcp_app),
     ],
     lifespan=mcp_app.lifespan,

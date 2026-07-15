@@ -6,6 +6,8 @@ primary_region = "sin"
 
 [env]
   PUBLIC_URL = "https://mcp.vanscoding.com"
+  # Classroom Discord server id (right-click server → Copy Server ID with Developer Mode).
+  # DISCORD_GUILD_ID = "123456789012345678"
 
 [http_service]
   internal_port = 8080

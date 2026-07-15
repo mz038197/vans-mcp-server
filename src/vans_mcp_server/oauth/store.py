@@ -15,6 +15,7 @@ from vans_mcp_server.oauth.google import GoogleOAuthService, GoogleTokenBundle
 logger = logging.getLogger(__name__)
 
 PROVIDER_GOOGLE = "google"
+PROVIDER_DISCORD_BOT = "discord_bot"
 
 
 def _normalize_database_url(url: str) -> str:
@@ -33,8 +34,18 @@ class StoredGoogleConnection:
     google_sub: str | None
 
 
+@dataclass
+class StoredDiscordBotConnection:
+    """Per-student Discord bot token. google_sub column holds bot_user_id."""
+
+    user_id: int
+    bot_token: str
+    application_id: str | None
+    bot_user_id: str | None
+
+
 class OAuthConnectionStore:
-    """Neon-backed per-user Google OAuth tokens (encrypted at rest)."""
+    """Neon-backed per-user OAuth/bot tokens (encrypted at rest)."""
 
     def __init__(
         self,
@@ -77,6 +88,8 @@ class OAuthConnectionStore:
             conn.commit()
 
     def is_connected(self, user_id: int, provider: str = PROVIDER_GOOGLE) -> bool:
+        if provider == PROVIDER_DISCORD_BOT:
+            return self.is_discord_bot_connected(user_id)
         with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
             row = conn.execute(
                 """
@@ -88,6 +101,75 @@ class OAuthConnectionStore:
                 (user_id, provider),
             ).fetchone()
             return row is not None
+
+    def is_discord_bot_connected(self, user_id: int) -> bool:
+        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+            row = conn.execute(
+                """
+                SELECT 1 AS ok
+                FROM mcp_oauth_connections
+                WHERE user_id = %s AND provider = %s
+                  AND access_token_enc IS NOT NULL
+                """,
+                (user_id, PROVIDER_DISCORD_BOT),
+            ).fetchone()
+            return row is not None
+
+    def upsert_discord_bot_token(
+        self,
+        *,
+        user_id: int,
+        bot_token: str,
+        application_id: str,
+        bot_user_id: str | None,
+    ) -> None:
+        token = (bot_token or "").strip()
+        app_id = (application_id or "").strip()
+        if not token:
+            raise ValueError("bot_token is required")
+        if not app_id:
+            raise ValueError("application_id is required")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        access_enc = self.encryptor.encrypt(token)
+        with psycopg.connect(self.database_url) as conn:
+            conn.execute(
+                """
+                INSERT INTO mcp_oauth_connections
+                    (user_id, provider, refresh_token_enc, access_token_enc,
+                     expires_at, scopes, google_sub, created_at, updated_at)
+                VALUES (%s, %s, NULL, %s, NULL, %s, %s, %s, %s)
+                ON CONFLICT (user_id, provider) DO UPDATE SET
+                    refresh_token_enc = NULL,
+                    access_token_enc = EXCLUDED.access_token_enc,
+                    expires_at = NULL,
+                    scopes = EXCLUDED.scopes,
+                    google_sub = EXCLUDED.google_sub,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (
+                    user_id,
+                    PROVIDER_DISCORD_BOT,
+                    access_enc,
+                    app_id,
+                    bot_user_id,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            conn.commit()
+
+    def get_discord_bot_connection(
+        self, user_id: int
+    ) -> StoredDiscordBotConnection | None:
+        row = self._load_row(user_id, provider=PROVIDER_DISCORD_BOT)
+        if not row or not row.get("access_token_enc"):
+            return None
+        return StoredDiscordBotConnection(
+            user_id=user_id,
+            bot_token=self.encryptor.decrypt(row["access_token_enc"]),
+            application_id=row.get("scopes"),
+            bot_user_id=row.get("google_sub"),
+        )
 
     def upsert_google_tokens(
         self,
@@ -103,7 +185,7 @@ class OAuthConnectionStore:
 
         existing_refresh = None
         if keep_existing_refresh and not bundle.refresh_token:
-            existing = self._load_row(user_id)
+            existing = self._load_row(user_id, provider=PROVIDER_GOOGLE)
             if existing and existing.get("refresh_token_enc"):
                 existing_refresh = existing["refresh_token_enc"]
 
@@ -149,7 +231,9 @@ class OAuthConnectionStore:
             )
             conn.commit()
 
-    def _load_row(self, user_id: int) -> dict[str, Any] | None:
+    def _load_row(
+        self, user_id: int, provider: str = PROVIDER_GOOGLE
+    ) -> dict[str, Any] | None:
         with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
             return conn.execute(
                 """
@@ -157,19 +241,19 @@ class OAuthConnectionStore:
                 FROM mcp_oauth_connections
                 WHERE user_id = %s AND provider = %s
                 """,
-                (user_id, PROVIDER_GOOGLE),
+                (user_id, provider),
             ).fetchone()
 
     def get_granted_scopes(
         self, user_id: int, provider: str = PROVIDER_GOOGLE
     ) -> str | None:
-        row = self._load_row(user_id) if provider == PROVIDER_GOOGLE else None
+        row = self._load_row(user_id, provider=provider) if provider == PROVIDER_GOOGLE else None
         if not row:
             return None
         return row.get("scopes")
 
     def get_valid_access_token(self, user_id: int) -> StoredGoogleConnection | None:
-        row = self._load_row(user_id)
+        row = self._load_row(user_id, provider=PROVIDER_GOOGLE)
         if not row or not row.get("refresh_token_enc"):
             return None
 
