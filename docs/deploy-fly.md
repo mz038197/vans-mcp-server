@@ -39,26 +39,28 @@ uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_
 powershell -ExecutionPolicy Bypass -File scripts\deploy-fly.ps1 -SecretsOnly
 ```
 
-## Google Cloud Console（Calendar + Gmail connect）
+## Google Cloud Console（Calendar + Gmail + Tasks connect）
 
-與 Portal／Dungeon **登入**分開：這是 MCP 的 Google Portal 授權（同一組連線含 Calendar 與 Gmail）。
+與 Portal／Dungeon **登入**分開：這是 MCP 的 Google Portal 授權（同一組連線含 Calendar、Gmail 與 Tasks）。
 
-1. 啟用 **Google Calendar API** 與 **Gmail API**
+1. 啟用 **Google Calendar API**、**Gmail API** 與 **Google Tasks API**
 2. OAuth Consent Screen 加入 scopes：
    - `https://www.googleapis.com/auth/calendar`
    - `https://www.googleapis.com/auth/gmail.readonly`
    - `https://www.googleapis.com/auth/gmail.compose`（含建草稿與寄信）
    - `https://www.googleapis.com/auth/gmail.modify`（含移到垃圾桶；非永久刪除）
+   - `https://www.googleapis.com/auth/tasks`
    - 以及 openid / email / profile
 3. 同一個 OAuth Client 追加 Authorized redirect URIs：
    - `https://mcp.vanscoding.com/connect/google/callback`
    - `http://127.0.0.1:8080/connect/google/callback`（本機）
 4. Testing 模式：把學生／測試帳號加進 Test users
-5. 若學生先前只授權部分 Gmail scopes：請再用 `google_get_connect_url` **重連一次**
+5. 若學生先前只授權部分 scopes（例如尚未含 Tasks）：請再用 `google_get_connect_url` **重連一次**
 
-學生流程：Agent 呼叫 `google_get_connect_url` → 瀏覽器授權 → 可用 `calendar_*` 與 `gmail_*`。  
-`gmail_send_email` / `gmail_trash_message` 必須 `confirm=true` 才會執行。  
-篩選信件：用 `gmail_search_messages`（Gmail query）取得 `message_id`，再 trash。
+學生流程：Agent 呼叫 `google_get_connect_url` → 瀏覽器授權 → 可用 `calendar_*`、`gmail_*` 與 `tasks_*`。  
+`gmail_send_email` / `gmail_trash_message` / `tasks_delete_task` 必須 `confirm=true` 才會執行。  
+篩選信件：用 `gmail_search_messages`（Gmail query）取得 `message_id`，再 trash。  
+完成任務：用 `tasks_update_task` 並傳 `status=completed`。
 
 ## Discord 課堂群組（學生自有 Bot）
 

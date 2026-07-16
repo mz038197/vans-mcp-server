@@ -1,4 +1,4 @@
-"""Google OAuth connect (Calendar + Gmail) — separate from portal login."""
+"""Google OAuth connect (Calendar + Gmail + Tasks) — separate from portal login."""
 
 from vans_mcp_server.oauth.google import (
     CALENDAR_SCOPES,
@@ -6,6 +6,7 @@ from vans_mcp_server.oauth.google import (
     GMAIL_MODIFY_SCOPE,
     GMAIL_READONLY_SCOPE,
     GOOGLE_PORTAL_SCOPES,
+    TASKS_SCOPE,
     GoogleOAuthService,
     GoogleTokenBundle,
     scopes_include,
@@ -18,6 +19,7 @@ __all__ = [
     "GMAIL_MODIFY_SCOPE",
     "GMAIL_READONLY_SCOPE",
     "GOOGLE_PORTAL_SCOPES",
+    "TASKS_SCOPE",
     "GoogleOAuthService",
     "GoogleTokenBundle",
     "OAuthConnectionStore",

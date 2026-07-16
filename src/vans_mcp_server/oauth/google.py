@@ -22,6 +22,7 @@ CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
 GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+TASKS_SCOPE = "https://www.googleapis.com/auth/tasks"
 
 GOOGLE_PORTAL_SCOPES = (
     "openid",
@@ -31,9 +32,10 @@ GOOGLE_PORTAL_SCOPES = (
     GMAIL_READONLY_SCOPE,
     GMAIL_COMPOSE_SCOPE,
     GMAIL_MODIFY_SCOPE,
+    TASKS_SCOPE,
 )
 
-# Backward-compatible alias (Calendar + Gmail portal scopes).
+# Backward-compatible alias (Calendar + Gmail + Tasks portal scopes).
 CALENDAR_SCOPES = GOOGLE_PORTAL_SCOPES
 
 
@@ -55,7 +57,7 @@ def scopes_include(granted: str | None, required: tuple[str, ...]) -> bool:
 
 
 class GoogleOAuthService:
-    """Offline Google OAuth for Calendar/Gmail connect (not portal login)."""
+    """Offline Google OAuth for Calendar/Gmail/Tasks connect (not portal login)."""
 
     def __init__(
         self,

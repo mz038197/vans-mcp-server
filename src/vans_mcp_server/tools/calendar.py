@@ -27,7 +27,7 @@ def not_connected_payload(
         "error": "not_connected",
         "message": (
             "Google Portal is not connected for this user. "
-            "Open connect_url in a browser to authorize Calendar/Gmail "
+            "Open connect_url in a browser to authorize Calendar/Gmail/Tasks "
             "(separate from portal login)."
         ),
         "oauth_configured": oauth_configured,
@@ -82,7 +82,7 @@ def connection_status(
         "message": (
             "Google Portal already connected."
             if connected
-            else "Open connect_url to authorize Google Calendar and Gmail."
+            else "Open connect_url to authorize Google Calendar, Gmail, and Tasks."
         ),
     }
 

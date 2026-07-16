@@ -21,6 +21,7 @@ from vans_mcp_server.tools import calendar as calendar_tools
 from vans_mcp_server.tools import discord as discord_tools
 from vans_mcp_server.tools import gmail as gmail_tools
 from vans_mcp_server.tools import knowledge
+from vans_mcp_server.tools import tasks as tasks_tools
 from vans_mcp_server.usage import UsageLogger, timed_tool
 
 logging.basicConfig(
@@ -46,13 +47,13 @@ mcp = FastMCP(
     "vans_mcp_server",
     instructions=(
         "Vans MCP Portal for Agent Dungeon. "
-        "Knowledge (mock Notion), Planning (Google Calendar), and Communication "
+        "Knowledge (mock Notion), Planning (Google Calendar + Tasks), and Communication "
         "(Gmail search/draft/send; Discord classroom bot list/read/send). "
         "Google tools require /connect/google authorization separate from portal login. "
         "Discord uses each student's own bot: discord_get_connect_url (paste token in "
         "browser, never in chat), then invite bot to the classroom guild. "
-        "gmail_send_email, gmail_trash_message, calendar_delete_event, and "
-        "discord_send_message require confirm=true."
+        "gmail_send_email, gmail_trash_message, calendar_delete_event, tasks_delete_task, "
+        "and discord_send_message require confirm=true."
     ),
 )
 
@@ -172,10 +173,10 @@ def notion_read_page(page_id: str) -> str:
     },
 )
 def google_get_connect_url() -> str:
-    """Return the browser URL to connect Google Calendar and Gmail for this student.
+    """Return the browser URL to connect Google Calendar, Gmail, and Tasks for this student.
 
     Separate from portal/dungeon Google login. Re-open after scope upgrades
-    (e.g. adding Gmail after a Calendar-only connect).
+    (e.g. adding Tasks after a Calendar/Gmail-only connect).
     """
     timer = timed_tool()
     ok = False
@@ -927,6 +928,371 @@ def gmail_trash_message(message_id: str, confirm: bool = False) -> str:
         raise
     finally:
         _record("gmail_trash_message", ok, timer.latency_ms, err)
+
+
+def _tasks_error_payload(user_id: int, exc: Exception) -> str:
+    connect_url = calendar_tools.build_connect_url(
+        google_oauth, public_url=_public_url(), user_id=user_id
+    )
+    if isinstance(exc, LookupError):
+        return tasks_tools.to_json(
+            calendar_tools.not_connected_payload(
+                connect_url=connect_url,
+                oauth_configured=google_oauth is not None,
+            )
+        )
+    if isinstance(exc, PermissionError):
+        granted = None
+        if oauth_store is not None:
+            granted = oauth_store.get_granted_scopes(user_id)
+        return tasks_tools.to_json(
+            tasks_tools.missing_scopes_payload(
+                connect_url=connect_url, granted=granted
+            )
+        )
+    raise exc
+
+
+@mcp.tool(
+    name="tasks_list_tasklists",
+    annotations={
+        "title": "List Google Tasks lists",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def tasks_list_tasklists(max_results: int = 20) -> str:
+    """List the student's Google Tasks task lists.
+
+    Args:
+        max_results: Max task lists to return (1-100).
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            error_payload, conn = tasks_tools.ensure_tasks_ready(
+                user_id=user_id,
+                store=oauth_store,
+                oauth=google_oauth,
+                public_url=_public_url(),
+            )
+            if error_payload is not None:
+                out = tasks_tools.to_json(error_payload)
+                err = error_payload.get("error")
+            else:
+                assert oauth_store is not None and google_oauth is not None and conn
+                result = tasks_tools.list_tasklists(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    max_results=max_results,
+                )
+                out = tasks_tools.to_json(result)
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _tasks_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("tasks_list_tasklists", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="tasks_list_tasks",
+    annotations={
+        "title": "List Google Tasks",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def tasks_list_tasks(
+    tasklist_id: str = "@default",
+    max_results: int = 20,
+    show_completed: bool = False,
+) -> str:
+    """List tasks in a Google Tasks list.
+
+    Args:
+        tasklist_id: Task list id (default @default).
+        max_results: Max tasks to return (1-100).
+        show_completed: Include completed/hidden tasks when true.
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            error_payload, conn = tasks_tools.ensure_tasks_ready(
+                user_id=user_id,
+                store=oauth_store,
+                oauth=google_oauth,
+                public_url=_public_url(),
+            )
+            if error_payload is not None:
+                out = tasks_tools.to_json(error_payload)
+                err = error_payload.get("error")
+            else:
+                assert oauth_store is not None and google_oauth is not None and conn
+                result = tasks_tools.list_tasks(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    tasklist_id=tasklist_id,
+                    max_results=max_results,
+                    show_completed=show_completed,
+                )
+                out = tasks_tools.to_json(result)
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _tasks_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("tasks_list_tasks", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="tasks_create_task",
+    annotations={
+        "title": "Create Google Task",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def tasks_create_task(
+    title: str,
+    notes: str = "",
+    due: str = "",
+    tasklist_id: str = "@default",
+) -> str:
+    """Create a task in Google Tasks.
+
+    Args:
+        title: Task title.
+        notes: Optional notes.
+        due: Optional due datetime (RFC 3339, e.g. 2026-07-20T00:00:00.000Z).
+        tasklist_id: Task list id (default @default).
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            error_payload, conn = tasks_tools.ensure_tasks_ready(
+                user_id=user_id,
+                store=oauth_store,
+                oauth=google_oauth,
+                public_url=_public_url(),
+            )
+            if error_payload is not None:
+                out = tasks_tools.to_json(error_payload)
+                err = error_payload.get("error")
+            else:
+                assert oauth_store is not None and google_oauth is not None and conn
+                result = tasks_tools.create_task(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    title=title,
+                    notes=notes,
+                    due=due,
+                    tasklist_id=tasklist_id,
+                )
+                out = tasks_tools.to_json(result)
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _tasks_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("tasks_create_task", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="tasks_update_task",
+    annotations={
+        "title": "Update Google Task",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def tasks_update_task(
+    task_id: str,
+    tasklist_id: str = "@default",
+    title: str | None = None,
+    notes: str | None = None,
+    due: str | None = None,
+    status: str | None = None,
+) -> str:
+    """Update a Google Task (title, notes, due, or status).
+
+    To mark complete, pass status=completed. To reopen, pass status=needsAction.
+
+    Args:
+        task_id: Task id from list/create results.
+        tasklist_id: Task list id (default @default).
+        title: New title (optional).
+        notes: New notes (optional).
+        due: New due datetime RFC 3339, or empty string to clear (optional).
+        status: needsAction or completed (optional).
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            error_payload, conn = tasks_tools.ensure_tasks_ready(
+                user_id=user_id,
+                store=oauth_store,
+                oauth=google_oauth,
+                public_url=_public_url(),
+            )
+            if error_payload is not None:
+                out = tasks_tools.to_json(error_payload)
+                err = error_payload.get("error")
+            else:
+                assert oauth_store is not None and google_oauth is not None and conn
+                result = tasks_tools.update_task(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    task_id=task_id,
+                    tasklist_id=tasklist_id,
+                    title=title,
+                    notes=notes,
+                    due=due,
+                    status=status,
+                )
+                out = tasks_tools.to_json(result)
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _tasks_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("tasks_update_task", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="tasks_delete_task",
+    annotations={
+        "title": "Delete Google Task",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def tasks_delete_task(
+    task_id: str,
+    tasklist_id: str = "@default",
+    confirm: bool = False,
+) -> str:
+    """Delete a Google Task.
+
+    Requires confirm=true after human approval. Without confirm, returns
+    confirmation_required and does not delete. Typical flow: tasks_list_tasks
+    to find ids, then delete with confirm=true.
+
+    Args:
+        task_id: Task id from list/create results.
+        tasklist_id: Task list id (default @default).
+        confirm: Must be true to actually delete.
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            tid = (task_id or "").strip()
+            if not tid:
+                raise ValueError("task_id is required")
+            if not confirm:
+                out = tasks_tools.to_json(
+                    tasks_tools.confirmation_required_payload(
+                        task_id=tid,
+                        tasklist_id=tasklist_id or "@default",
+                    )
+                )
+                err = "confirmation_required"
+            else:
+                error_payload, conn = tasks_tools.ensure_tasks_ready(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    public_url=_public_url(),
+                )
+                if error_payload is not None:
+                    out = tasks_tools.to_json(error_payload)
+                    err = error_payload.get("error")
+                else:
+                    assert oauth_store is not None and google_oauth is not None and conn
+                    result = tasks_tools.delete_task(
+                        user_id=user_id,
+                        store=oauth_store,
+                        oauth=google_oauth,
+                        task_id=tid,
+                        tasklist_id=tasklist_id,
+                        confirm=True,
+                    )
+                    out = tasks_tools.to_json(result)
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _tasks_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("tasks_delete_task", ok, timer.latency_ms, err)
 
 
 def _discord_error_payload(user_id: int, exc: Exception) -> str:

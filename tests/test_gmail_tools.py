@@ -46,6 +46,7 @@ def test_authorize_url_includes_gmail_modify():
     assert "gmail.compose" in url
     assert "gmail.modify" in url
     assert "calendar" in url
+    assert "auth%2Ftasks" in url
 
 
 def test_send_email_requires_confirm():

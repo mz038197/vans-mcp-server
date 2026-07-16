@@ -6,8 +6,9 @@ Vans MCP Portal server for Agent Dungeon. HTTP MCP Gateway at `mcp.vanscoding.co
 - Milestone 3: Google Calendar Planning Portal (`google_get_connect_url`, `calendar_list_events`, `calendar_find_free_time`, `calendar_create_event`, `calendar_update_event`, `calendar_delete_event`)
 - Milestone 4: Gmail Communication Portal (`gmail_search_messages`, `gmail_summarize_thread`, `gmail_create_draft`, `gmail_send_email`, `gmail_trash_message`)
 - Milestone 5: Discord classroom portal (`discord_get_connect_url`, `discord_list_channels`, `discord_read_messages`, `discord_send_message`) — each student connects **their own bot**
+- Milestone 6: Google Tasks Planning Portal (`tasks_list_tasklists`, `tasks_list_tasks`, `tasks_create_task`, `tasks_update_task`, `tasks_delete_task`)
 
-Google connect is **separate from** portal/dungeon Google login. One connect grants Calendar + Gmail scopes. `gmail_send_email`, `gmail_trash_message`, `calendar_delete_event`, and `discord_send_message` require `confirm=true`. Filter messages with `gmail_search_messages` (Gmail query), then trash by id.
+Google connect is **separate from** portal/dungeon Google login. One connect grants Calendar + Gmail + Tasks scopes. `gmail_send_email`, `gmail_trash_message`, `calendar_delete_event`, `tasks_delete_task`, and `discord_send_message` require `confirm=true`. Filter messages with `gmail_search_messages` (Gmail query), then trash by id. Mark a task done with `tasks_update_task(status="completed")`.
 
 Discord: student creates a Bot in the Developer Portal → `discord_get_connect_url` → paste token on the connect page (never in chat) → invite bot into `DISCORD_GUILD_ID` → list/read/send. At course end, reset the Bot Token.
 
