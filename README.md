@@ -3,7 +3,7 @@
 Vans MCP Portal server for Agent Dungeon. HTTP MCP Gateway at `mcp.vanscoding.com`.
 
 - Milestone 1: `vcr_sk_` auth + course mock Knowledge Portal (`notion_search_pages`, `notion_read_page`)
-- Milestone 3: Google Calendar Planning Portal (`google_get_connect_url`, `calendar_list_events`, `calendar_find_free_time`, `calendar_create_event`, `calendar_update_event`, `calendar_delete_event`)
+- Milestone 3: Google Calendar Planning Portal (`google_get_connect_url`, `calendar_list_events`, `calendar_find_free_time`, `calendar_create_event`, `calendar_update_event`, `calendar_delete_event`); create/update accept optional `attendees` emails and send Google invitations (`sendUpdates=all`)
 - Milestone 4: Gmail Communication Portal (`gmail_search_messages`, `gmail_summarize_thread`, `gmail_create_draft`, `gmail_send_email`, `gmail_trash_message`)
 - Milestone 5: Discord classroom portal (`discord_get_connect_url`, `discord_list_channels`, `discord_read_messages`, `discord_send_message`) — each student connects **their own bot**
 - Milestone 6: Google Tasks Planning Portal (`tasks_list_tasklists`, `tasks_list_tasks`, `tasks_create_task`, `tasks_update_task`, `tasks_delete_task`)

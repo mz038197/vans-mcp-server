@@ -379,8 +379,11 @@ def calendar_create_event(
     end: str,
     description: str = "",
     timezone_name: str = "Asia/Taipei",
+    attendees: list[str] | None = None,
 ) -> str:
     """Create an event on the student's primary Google Calendar.
+
+    When attendees are provided, Google sends invitation emails (sendUpdates=all).
 
     Args:
         summary: Event title.
@@ -388,6 +391,7 @@ def calendar_create_event(
         end: End datetime (ISO-8601).
         description: Optional description.
         timezone_name: IANA timezone (default Asia/Taipei).
+        attendees: Optional guest email addresses to invite.
     """
     timer = timed_tool()
     ok = False
@@ -410,6 +414,7 @@ def calendar_create_event(
                     end=end,
                     description=description,
                     timezone_name=timezone_name,
+                    attendees=attendees,
                 )
                 out = calendar_tools.to_json(result)
         ok = True
@@ -451,11 +456,14 @@ def calendar_update_event(
     end: str | None = None,
     description: str | None = None,
     timezone_name: str = "Asia/Taipei",
+    attendees: list[str] | None = None,
 ) -> str:
     """Update fields on an existing primary-calendar event.
 
-    Provide at least one of summary, start/end (both required together), or
-    description. event_id comes from calendar_list_events or calendar_create_event.
+    Provide at least one of summary, start/end (both required together),
+    description, or attendees. event_id comes from calendar_list_events or
+    calendar_create_event. Passing attendees replaces the guest list and sends
+    invitation emails (sendUpdates=all); omit attendees to leave guests unchanged.
 
     Args:
         event_id: Google Calendar event id.
@@ -464,6 +472,7 @@ def calendar_update_event(
         end: New end datetime ISO-8601 (must pair with start).
         description: New description (omit to leave unchanged; pass "" to clear).
         timezone_name: IANA timezone for start/end (default Asia/Taipei).
+        attendees: Optional guest emails to set (full replace); omit to leave unchanged.
     """
     timer = timed_tool()
     ok = False
@@ -487,6 +496,7 @@ def calendar_update_event(
                     end=end,
                     description=description,
                     timezone_name=timezone_name,
+                    attendees=attendees,
                 )
                 out = calendar_tools.to_json(result)
         ok = True

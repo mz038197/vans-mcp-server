@@ -134,6 +134,45 @@ def _event_datetime_payload(dt: datetime, tz_name: str) -> dict[str, str]:
     }
 
 
+def _attendee_payloads(emails: list[str] | None) -> list[dict[str, str]] | None:
+    """Normalize invitee emails for Google Event.attendees.
+
+    Returns None when ``emails`` is None (caller should leave attendees unchanged).
+    Returns a (possibly empty) list when ``emails`` is provided.
+    """
+    if emails is None:
+        return None
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in emails:
+        email = (raw or "").strip()
+        if not email:
+            continue
+        if "@" not in email or email.startswith("@") or email.endswith("@"):
+            raise ValueError(f"invalid attendee email: {raw!r}")
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"email": email})
+    return out
+
+
+def _attendees_summary(items: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    """Trim Google attendees to email + responseStatus for tool responses."""
+    summary: list[dict[str, str]] = []
+    for item in items or []:
+        email = item.get("email")
+        if not email:
+            continue
+        entry: dict[str, str] = {"email": str(email)}
+        status = item.get("responseStatus")
+        if status:
+            entry["responseStatus"] = str(status)
+        summary.append(entry)
+    return summary
+
+
 def list_events(
     *,
     user_id: int,
@@ -174,6 +213,7 @@ def list_events(
                 "end": item.get("end"),
                 "htmlLink": item.get("htmlLink"),
                 "status": item.get("status"),
+                "attendees": _attendees_summary(item.get("attendees")),
             }
         )
     return {
@@ -264,12 +304,14 @@ def create_event(
     end: str,
     description: str = "",
     timezone_name: str = DEFAULT_TIMEZONE,
+    attendees: list[str] | None = None,
 ) -> dict[str, Any]:
     conn = store.get_valid_access_token(user_id)
     if conn is None:
         raise LookupError("not_connected")
     if not (summary or "").strip():
         raise ValueError("summary is required")
+    guest_list = _attendee_payloads(attendees)
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
     service = _calendar_service(creds)
     start_dt = _parse_in_timezone(start, timezone_name)
@@ -280,7 +322,12 @@ def create_event(
         "start": _event_datetime_payload(start_dt, timezone_name),
         "end": _event_datetime_payload(end_dt, timezone_name),
     }
-    created = service.events().insert(calendarId="primary", body=body).execute()
+    insert_kwargs: dict[str, Any] = {"calendarId": "primary", "body": body}
+    # None = omit; [] = explicit empty guest list (same as update_event).
+    if guest_list is not None:
+        body["attendees"] = guest_list
+        insert_kwargs["sendUpdates"] = "all"
+    created = service.events().insert(**insert_kwargs).execute()
     return {
         "created": True,
         "id": created.get("id"),
@@ -288,6 +335,7 @@ def create_event(
         "htmlLink": created.get("htmlLink"),
         "start": created.get("start"),
         "end": created.get("end"),
+        "attendees": _attendees_summary(created.get("attendees")),
         "source": "google_calendar",
     }
 
@@ -316,6 +364,7 @@ def update_event(
     end: str | None = None,
     description: str | None = None,
     timezone_name: str = DEFAULT_TIMEZONE,
+    attendees: list[str] | None = None,
 ) -> dict[str, Any]:
     """Patch fields on an existing primary-calendar event."""
     eid = (event_id or "").strip()
@@ -325,6 +374,7 @@ def update_event(
     has_end = end is not None and str(end).strip() != ""
     if has_start != has_end:
         raise ValueError("start and end must both be provided when changing time")
+    guest_list = _attendee_payloads(attendees)
     body: dict[str, Any] = {}
     if summary is not None:
         if not str(summary).strip():
@@ -337,19 +387,26 @@ def update_event(
         end_dt = _parse_in_timezone(str(end), timezone_name)
         body["start"] = _event_datetime_payload(start_dt, timezone_name)
         body["end"] = _event_datetime_payload(end_dt, timezone_name)
+    if guest_list is not None:
+        body["attendees"] = guest_list
     if not body:
-        raise ValueError("provide at least one of summary, start/end, description")
+        raise ValueError(
+            "provide at least one of summary, start/end, description, attendees"
+        )
 
     conn = store.get_valid_access_token(user_id)
     if conn is None:
         raise LookupError("not_connected")
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
     service = _calendar_service(creds)
-    updated = (
-        service.events()
-        .patch(calendarId="primary", eventId=eid, body=body)
-        .execute()
-    )
+    patch_kwargs: dict[str, Any] = {
+        "calendarId": "primary",
+        "eventId": eid,
+        "body": body,
+    }
+    if guest_list is not None:
+        patch_kwargs["sendUpdates"] = "all"
+    updated = service.events().patch(**patch_kwargs).execute()
     return {
         "updated": True,
         "id": updated.get("id") or eid,
@@ -358,6 +415,7 @@ def update_event(
         "start": updated.get("start"),
         "end": updated.get("end"),
         "status": updated.get("status"),
+        "attendees": _attendees_summary(updated.get("attendees")),
         "source": "google_calendar",
     }
 

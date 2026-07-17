@@ -243,6 +243,208 @@ def test_update_event_patches_summary_and_time():
         "dateTime": "2026-07-12T16:00:00",
         "timeZone": "Asia/Taipei",
     }
+    assert "sendUpdates" not in kwargs
+
+
+def test_create_event_with_attendees_sends_updates():
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    store = MagicMock()
+    store.get_valid_access_token.return_value = MagicMock(
+        access_token="access",
+        refresh_token="refresh",
+    )
+    fake_service = MagicMock()
+    fake_service.events.return_value.insert.return_value.execute.return_value = {
+        "id": "evt2",
+        "summary": "Meetup",
+        "htmlLink": "https://calendar.google.com/event?eid=2",
+        "start": {"dateTime": "2026-07-12T15:00:00", "timeZone": "Asia/Taipei"},
+        "end": {"dateTime": "2026-07-12T16:00:00", "timeZone": "Asia/Taipei"},
+        "attendees": [
+            {"email": "a@example.com", "responseStatus": "needsAction"},
+            {"email": "b@example.com", "responseStatus": "needsAction"},
+        ],
+    }
+
+    with patch("vans_mcp_server.tools.calendar._calendar_service", return_value=fake_service):
+        result = calendar_tools.create_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            summary="Meetup",
+            start="2026-07-12T15:00:00",
+            end="2026-07-12T16:00:00",
+            attendees=["a@example.com", " b@example.com ", "a@example.com"],
+        )
+
+    assert result["created"] is True
+    assert result["attendees"] == [
+        {"email": "a@example.com", "responseStatus": "needsAction"},
+        {"email": "b@example.com", "responseStatus": "needsAction"},
+    ]
+    kwargs = fake_service.events.return_value.insert.call_args.kwargs
+    assert kwargs["sendUpdates"] == "all"
+    assert kwargs["body"]["attendees"] == [
+        {"email": "a@example.com"},
+        {"email": "b@example.com"},
+    ]
+
+
+def test_create_event_without_attendees_omits_send_updates():
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    store = MagicMock()
+    store.get_valid_access_token.return_value = MagicMock(
+        access_token="access",
+        refresh_token="refresh",
+    )
+    fake_service = MagicMock()
+    fake_service.events.return_value.insert.return_value.execute.return_value = {
+        "id": "evt3",
+        "summary": "Solo",
+        "htmlLink": "https://calendar.google.com/event?eid=3",
+        "start": {"dateTime": "2026-07-12T15:00:00", "timeZone": "Asia/Taipei"},
+        "end": {"dateTime": "2026-07-12T16:00:00", "timeZone": "Asia/Taipei"},
+    }
+
+    with patch("vans_mcp_server.tools.calendar._calendar_service", return_value=fake_service):
+        calendar_tools.create_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            summary="Solo",
+            start="2026-07-12T15:00:00",
+            end="2026-07-12T16:00:00",
+        )
+
+    kwargs = fake_service.events.return_value.insert.call_args.kwargs
+    assert "sendUpdates" not in kwargs
+    assert "attendees" not in kwargs["body"]
+
+
+def test_empty_attendees_list_sets_send_updates_on_create_and_update():
+    """attendees=[] is explicit (not omit); both create and update use sendUpdates=all."""
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    store = MagicMock()
+    store.get_valid_access_token.return_value = MagicMock(
+        access_token="access",
+        refresh_token="refresh",
+    )
+    fake_service = MagicMock()
+    fake_service.events.return_value.insert.return_value.execute.return_value = {
+        "id": "evt-empty",
+        "summary": "Empty guests",
+        "htmlLink": "https://calendar.google.com/event?eid=e",
+        "start": {"dateTime": "2026-07-12T15:00:00", "timeZone": "Asia/Taipei"},
+        "end": {"dateTime": "2026-07-12T16:00:00", "timeZone": "Asia/Taipei"},
+        "attendees": [],
+    }
+    fake_service.events.return_value.patch.return_value.execute.return_value = {
+        "id": "evt1",
+        "summary": "Cleared",
+        "htmlLink": "https://calendar.google.com/event?eid=1",
+        "attendees": [],
+        "status": "confirmed",
+    }
+
+    with patch("vans_mcp_server.tools.calendar._calendar_service", return_value=fake_service):
+        calendar_tools.create_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            summary="Empty guests",
+            start="2026-07-12T15:00:00",
+            end="2026-07-12T16:00:00",
+            attendees=[],
+        )
+        calendar_tools.update_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            event_id="evt1",
+            attendees=[],
+        )
+
+    insert_kwargs = fake_service.events.return_value.insert.call_args.kwargs
+    assert insert_kwargs["sendUpdates"] == "all"
+    assert insert_kwargs["body"]["attendees"] == []
+
+    patch_kwargs = fake_service.events.return_value.patch.call_args.kwargs
+    assert patch_kwargs["sendUpdates"] == "all"
+    assert patch_kwargs["body"] == {"attendees": []}
+
+
+def test_update_event_attendees_only_sends_updates():
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    store = MagicMock()
+    store.get_valid_access_token.return_value = MagicMock(
+        access_token="access",
+        refresh_token="refresh",
+    )
+    fake_service = MagicMock()
+    fake_service.events.return_value.patch.return_value.execute.return_value = {
+        "id": "evt1",
+        "summary": "Study",
+        "htmlLink": "https://calendar.google.com/event?eid=1",
+        "attendees": [{"email": "guest@example.com", "responseStatus": "needsAction"}],
+        "status": "confirmed",
+    }
+
+    with patch("vans_mcp_server.tools.calendar._calendar_service", return_value=fake_service):
+        result = calendar_tools.update_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            event_id="evt1",
+            attendees=["guest@example.com"],
+        )
+
+    assert result["updated"] is True
+    assert result["attendees"] == [
+        {"email": "guest@example.com", "responseStatus": "needsAction"}
+    ]
+    kwargs = fake_service.events.return_value.patch.call_args.kwargs
+    assert kwargs["sendUpdates"] == "all"
+    assert kwargs["body"] == {"attendees": [{"email": "guest@example.com"}]}
+
+
+def test_attendee_payloads_rejects_invalid_email():
+    with pytest.raises(ValueError, match="invalid attendee email"):
+        calendar_tools._attendee_payloads(["not-an-email"])
+    with pytest.raises(ValueError, match="invalid attendee email"):
+        calendar_tools.create_event(
+            user_id=1,
+            store=MagicMock(),
+            oauth=GoogleOAuthService(
+                client_id="cid",
+                client_secret="csecret",
+                redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+                session_secret="session-secret-for-tests",
+            ),
+            summary="Bad",
+            start="2026-07-12T15:00:00",
+            end="2026-07-12T16:00:00",
+            attendees=["bad-email"],
+        )
 
 
 def test_update_event_rejects_partial_time_and_empty_body():
