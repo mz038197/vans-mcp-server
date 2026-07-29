@@ -1,6 +1,6 @@
 [project]
 name = "vans-mcp-server"
-version = "0.1.0"
+version = "0.1.1"
 description = "Vans MCP Portal server — HTTP MCP Gateway for Agent Dungeon (mcp.vanscoding.com)."
 readme = "README.md"
 requires-python = ">=3.12"

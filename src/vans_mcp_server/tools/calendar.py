@@ -74,13 +74,17 @@ def connection_status(
             "hint": "DATABASE_URL and OAUTH_TOKEN_ENCRYPTION_KEY are required.",
         }
     connected = store.is_connected(user_id)
+    # Always return connect_url so stale/revoked refresh tokens can be re-authorized
+    # without a separate disconnect tool (google token refresh 400 otherwise leaves
+    # connected=true and connect_url=null).
     return {
         "connected": connected,
         "oauth_configured": oauth_configured,
         "store_configured": True,
-        "connect_url": connect_url if not connected else None,
+        "connect_url": connect_url,
         "message": (
-            "Google Portal already connected."
+            "Google Portal already connected. Open connect_url to re-authorize "
+            "if Calendar/Gmail/Tasks calls fail (e.g. revoked refresh token)."
             if connected
             else "Open connect_url to authorize Google Calendar, Gmail, and Tasks."
         ),

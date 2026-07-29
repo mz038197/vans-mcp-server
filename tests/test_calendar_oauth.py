@@ -66,6 +66,29 @@ def test_build_connect_url():
     assert url.startswith("https://mcp.vanscoding.com/connect/google/start?state=")
 
 
+def test_connection_status_returns_connect_url_when_already_connected():
+    """Stale refresh tokens still need a reconnect URL."""
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    store = MagicMock()
+    store.is_connected.return_value = True
+    status = calendar_tools.connection_status(
+        user_id=1,
+        store=store,
+        oauth=oauth,
+        public_url="https://mcp.vanscoding.com",
+    )
+    assert status["connected"] is True
+    assert status["connect_url"]
+    assert status["connect_url"].startswith(
+        "https://mcp.vanscoding.com/connect/google/start?state="
+    )
+
+
 def test_parse_in_timezone_naive_and_aware():
     naive = calendar_tools._parse_in_timezone("2026-07-12T15:00:00", "Asia/Taipei")
     assert naive.tzinfo is not None

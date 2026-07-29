@@ -62,6 +62,12 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-fly.ps1 -SecretsOnly
 篩選信件：用 `gmail_search_messages`（Gmail query）取得 `message_id`，再 trash。  
 完成任務：用 `tasks_update_task` 並傳 `status=completed`。
 
+### 已知坑：refresh token 失效但 `connected=true`
+
+- **症狀**：`gmail_*`／`calendar_*` 報 `oauth2.googleapis.com/token` **400**；`google_get_connect_url` 卻說 already connected。
+- **原因**：DB 仍有 `refresh_token_enc`，但 Google 端 refresh 已撤銷／失效；舊版在 `connected` 時把 `connect_url` 設成 `null`，無法重連。
+- **正確**：`google_get_connect_url` **一律回傳** `connect_url`（已連線也可重授權覆寫 token）。若 production 尚未部署此修正，可暫時刪除 `mcp_oauth_connections` 中該 `user_id`＋`provider=google` 列後再呼叫一次。
+
 ## Discord 課堂群組（學生自有 Bot）
 
 每位學生建立 **自己的** Discord Application + Bot（非共用一台課務 Bot）。
