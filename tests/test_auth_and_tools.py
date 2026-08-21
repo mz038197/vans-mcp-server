@@ -132,3 +132,19 @@ def test_mcp_accepts_bypass_key(monkeypatch):
             },
         )
         assert res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_calendar_attendees_schema_is_plain_array(monkeypatch):
+    """Cursor/VS Code rejects anyOf [array, null]; attendees must be a plain array."""
+    app_module = _reload_app(monkeypatch)
+    create = await app_module.mcp.get_tool("calendar_create_event")
+    update = await app_module.mcp.get_tool("calendar_update_event")
+    for tool in (create, update):
+        attendees = tool.parameters["properties"]["attendees"]
+        assert attendees.get("type") == "array"
+        assert attendees.get("items") == {"type": "string"}
+        assert "anyOf" not in attendees
+    clear = update.parameters["properties"]["clear_attendees"]
+    assert clear.get("type") == "boolean"
+    assert "anyOf" not in clear

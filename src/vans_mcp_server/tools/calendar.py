@@ -139,10 +139,10 @@ def _event_datetime_payload(dt: datetime, tz_name: str) -> dict[str, str]:
 
 
 def _attendee_payloads(emails: list[str] | None) -> list[dict[str, str]] | None:
-    """Normalize invitee emails for Google Event.attendees.
+    """Normalize Attendee emails for Google Event.attendees.
 
-    Returns None when ``emails`` is None (caller should leave attendees unchanged).
-    Returns a (possibly empty) list when ``emails`` is provided.
+    Returns None when ``emails`` is None (caller should leave the Attendee list
+    unchanged). Returns a (possibly empty) list when ``emails`` is provided.
     """
     if emails is None:
         return None
@@ -160,6 +160,28 @@ def _attendee_payloads(emails: list[str] | None) -> list[dict[str, str]] | None:
         seen.add(key)
         out.append({"email": email})
     return out
+
+
+def _attendee_list_for_update(
+    emails: list[str] | None,
+    *,
+    clear: bool,
+) -> list[dict[str, str]] | None:
+    """Attendee list for patch, or None to leave the Attendee list unchanged.
+
+    Non-empty emails replace the list. Empty emails without ``clear`` leave it
+    unchanged. ``clear`` replaces with an empty list and cannot combine with
+    a non-empty email list.
+    """
+    if clear:
+        if _attendee_payloads(emails):
+            raise ValueError(
+                "clear_attendees cannot be combined with a non-empty attendees list"
+            )
+        return []
+    if not emails:
+        return None
+    return _attendee_payloads(emails) or None
 
 
 def _attendees_summary(items: list[dict[str, Any]] | None) -> list[dict[str, str]]:
@@ -315,7 +337,7 @@ def create_event(
         raise LookupError("not_connected")
     if not (summary or "").strip():
         raise ValueError("summary is required")
-    guest_list = _attendee_payloads(attendees)
+    payloads = _attendee_payloads(attendees)
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
     service = _calendar_service(creds)
     start_dt = _parse_in_timezone(start, timezone_name)
@@ -327,9 +349,9 @@ def create_event(
         "end": _event_datetime_payload(end_dt, timezone_name),
     }
     insert_kwargs: dict[str, Any] = {"calendarId": "primary", "body": body}
-    # None = omit; [] = explicit empty guest list (same as update_event).
-    if guest_list is not None:
-        body["attendees"] = guest_list
+    # Empty or None = no Attendees (MCP default [] is omit, not an empty Google list).
+    if payloads:
+        body["attendees"] = payloads
         insert_kwargs["sendUpdates"] = "all"
     created = service.events().insert(**insert_kwargs).execute()
     return {
@@ -369,6 +391,7 @@ def update_event(
     description: str | None = None,
     timezone_name: str = DEFAULT_TIMEZONE,
     attendees: list[str] | None = None,
+    clear_attendees: bool = False,
 ) -> dict[str, Any]:
     """Patch fields on an existing primary-calendar event."""
     eid = (event_id or "").strip()
@@ -378,7 +401,7 @@ def update_event(
     has_end = end is not None and str(end).strip() != ""
     if has_start != has_end:
         raise ValueError("start and end must both be provided when changing time")
-    guest_list = _attendee_payloads(attendees)
+    payloads = _attendee_list_for_update(attendees, clear=clear_attendees)
     body: dict[str, Any] = {}
     if summary is not None:
         if not str(summary).strip():
@@ -391,11 +414,12 @@ def update_event(
         end_dt = _parse_in_timezone(str(end), timezone_name)
         body["start"] = _event_datetime_payload(start_dt, timezone_name)
         body["end"] = _event_datetime_payload(end_dt, timezone_name)
-    if guest_list is not None:
-        body["attendees"] = guest_list
+    if payloads is not None:
+        body["attendees"] = payloads
     if not body:
         raise ValueError(
-            "provide at least one of summary, start/end, description, attendees"
+            "provide at least one of summary, start/end, description, "
+            "attendees, or clear_attendees"
         )
 
     conn = store.get_valid_access_token(user_id)
@@ -408,7 +432,7 @@ def update_event(
         "eventId": eid,
         "body": body,
     }
-    if guest_list is not None:
+    if payloads is not None:
         patch_kwargs["sendUpdates"] = "all"
     updated = service.events().patch(**patch_kwargs).execute()
     return {

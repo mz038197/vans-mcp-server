@@ -379,11 +379,11 @@ def calendar_create_event(
     end: str,
     description: str = "",
     timezone_name: str = "Asia/Taipei",
-    attendees: list[str] | None = None,
+    attendees: list[str] = [],
 ) -> str:
     """Create an event on the student's primary Google Calendar.
 
-    When attendees are provided, Google sends invitation emails (sendUpdates=all).
+    When attendees are provided, Google notifies them (sendUpdates=all).
 
     Args:
         summary: Event title.
@@ -391,7 +391,7 @@ def calendar_create_event(
         end: End datetime (ISO-8601).
         description: Optional description.
         timezone_name: IANA timezone (default Asia/Taipei).
-        attendees: Optional guest email addresses to invite.
+        attendees: Attendee emails to invite. Empty means no attendees.
     """
     timer = timed_tool()
     ok = False
@@ -456,14 +456,17 @@ def calendar_update_event(
     end: str | None = None,
     description: str | None = None,
     timezone_name: str = "Asia/Taipei",
-    attendees: list[str] | None = None,
+    attendees: list[str] = [],
+    clear_attendees: bool = False,
 ) -> str:
     """Update fields on an existing primary-calendar event.
 
     Provide at least one of summary, start/end (both required together),
-    description, or attendees. event_id comes from calendar_list_events or
-    calendar_create_event. Passing attendees replaces the guest list and sends
-    invitation emails (sendUpdates=all); omit attendees to leave guests unchanged.
+    description, attendees, or clear_attendees. event_id comes from
+    calendar_list_events or calendar_create_event. A non-empty attendees list
+    replaces the Attendee list and Google notifies them (sendUpdates=all).
+    An empty attendees list leaves the Attendee list unchanged.
+    clear_attendees=true removes everyone.
 
     Args:
         event_id: Google Calendar event id.
@@ -472,7 +475,8 @@ def calendar_update_event(
         end: New end datetime ISO-8601 (must pair with start).
         description: New description (omit to leave unchanged; pass "" to clear).
         timezone_name: IANA timezone for start/end (default Asia/Taipei).
-        attendees: Optional guest emails to set (full replace); omit to leave unchanged.
+        attendees: Attendee emails to set (full replace). Empty leaves the Attendee list unchanged.
+        clear_attendees: If true, replace the Attendee list with empty.
     """
     timer = timed_tool()
     ok = False
@@ -497,6 +501,7 @@ def calendar_update_event(
                     description=description,
                     timezone_name=timezone_name,
                     attendees=attendees,
+                    clear_attendees=clear_attendees,
                 )
                 out = calendar_tools.to_json(result)
         ok = True

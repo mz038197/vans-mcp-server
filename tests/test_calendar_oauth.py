@@ -348,14 +348,24 @@ def test_create_event_without_attendees_omits_send_updates():
             start="2026-07-12T15:00:00",
             end="2026-07-12T16:00:00",
         )
+        calendar_tools.create_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            summary="Solo",
+            start="2026-07-12T15:00:00",
+            end="2026-07-12T16:00:00",
+            attendees=[],
+        )
 
-    kwargs = fake_service.events.return_value.insert.call_args.kwargs
-    assert "sendUpdates" not in kwargs
-    assert "attendees" not in kwargs["body"]
+    assert fake_service.events.return_value.insert.call_count == 2
+    for call in fake_service.events.return_value.insert.call_args_list:
+        kwargs = call.kwargs
+        assert "sendUpdates" not in kwargs
+        assert "attendees" not in kwargs["body"]
 
 
-def test_empty_attendees_list_sets_send_updates_on_create_and_update():
-    """attendees=[] is explicit (not omit); both create and update use sendUpdates=all."""
+def test_update_empty_attendees_leaves_attendee_list_unchanged():
     oauth = GoogleOAuthService(
         client_id="cid",
         client_secret="csecret",
@@ -368,14 +378,41 @@ def test_empty_attendees_list_sets_send_updates_on_create_and_update():
         refresh_token="refresh",
     )
     fake_service = MagicMock()
-    fake_service.events.return_value.insert.return_value.execute.return_value = {
-        "id": "evt-empty",
-        "summary": "Empty guests",
-        "htmlLink": "https://calendar.google.com/event?eid=e",
-        "start": {"dateTime": "2026-07-12T15:00:00", "timeZone": "Asia/Taipei"},
-        "end": {"dateTime": "2026-07-12T16:00:00", "timeZone": "Asia/Taipei"},
-        "attendees": [],
+    fake_service.events.return_value.patch.return_value.execute.return_value = {
+        "id": "evt1",
+        "summary": "Revised",
+        "htmlLink": "https://calendar.google.com/event?eid=1",
+        "status": "confirmed",
     }
+
+    with patch("vans_mcp_server.tools.calendar._calendar_service", return_value=fake_service):
+        calendar_tools.update_event(
+            user_id=1,
+            store=store,
+            oauth=oauth,
+            event_id="evt1",
+            summary="Revised",
+            attendees=[],
+        )
+
+    kwargs = fake_service.events.return_value.patch.call_args.kwargs
+    assert kwargs["body"] == {"summary": "Revised"}
+    assert "sendUpdates" not in kwargs
+
+
+def test_clear_attendees_sends_empty_list():
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    store = MagicMock()
+    store.get_valid_access_token.return_value = MagicMock(
+        access_token="access",
+        refresh_token="refresh",
+    )
+    fake_service = MagicMock()
     fake_service.events.return_value.patch.return_value.execute.return_value = {
         "id": "evt1",
         "summary": "Cleared",
@@ -385,30 +422,35 @@ def test_empty_attendees_list_sets_send_updates_on_create_and_update():
     }
 
     with patch("vans_mcp_server.tools.calendar._calendar_service", return_value=fake_service):
-        calendar_tools.create_event(
-            user_id=1,
-            store=store,
-            oauth=oauth,
-            summary="Empty guests",
-            start="2026-07-12T15:00:00",
-            end="2026-07-12T16:00:00",
-            attendees=[],
-        )
         calendar_tools.update_event(
             user_id=1,
             store=store,
             oauth=oauth,
             event_id="evt1",
-            attendees=[],
+            clear_attendees=True,
         )
 
-    insert_kwargs = fake_service.events.return_value.insert.call_args.kwargs
-    assert insert_kwargs["sendUpdates"] == "all"
-    assert insert_kwargs["body"]["attendees"] == []
+    kwargs = fake_service.events.return_value.patch.call_args.kwargs
+    assert kwargs["sendUpdates"] == "all"
+    assert kwargs["body"] == {"attendees": []}
 
-    patch_kwargs = fake_service.events.return_value.patch.call_args.kwargs
-    assert patch_kwargs["sendUpdates"] == "all"
-    assert patch_kwargs["body"] == {"attendees": []}
+
+def test_clear_attendees_rejects_nonempty_list():
+    oauth = GoogleOAuthService(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://127.0.0.1:8080/connect/google/callback",
+        session_secret="session-secret-for-tests",
+    )
+    with pytest.raises(ValueError, match="clear_attendees cannot be combined"):
+        calendar_tools.update_event(
+            user_id=1,
+            store=MagicMock(),
+            oauth=oauth,
+            event_id="evt1",
+            attendees=["a@example.com"],
+            clear_attendees=True,
+        )
 
 
 def test_update_event_attendees_only_sends_updates():
