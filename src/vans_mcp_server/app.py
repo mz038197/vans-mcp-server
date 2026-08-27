@@ -48,12 +48,17 @@ mcp = FastMCP(
     instructions=(
         "Vans MCP Portal for Agent Dungeon. "
         "Knowledge (mock Notion), Planning (Google Calendar + Tasks), and Communication "
-        "(Gmail search/draft/send; Discord classroom bot list/read/send). "
+        "(Gmail search/draft/send/read/labels; Discord classroom bot list/read/send). "
         "Google tools require /connect/google authorization separate from portal login. "
         "Discord uses each student's own bot: discord_get_connect_url (paste token in "
         "browser, never in chat), then invite bot to the classroom guild. "
         "gmail_send_email, gmail_trash_message, calendar_delete_event, tasks_delete_task, "
-        "and discord_send_message require confirm=true."
+        "and discord_send_message require confirm=true. "
+        "gmail_search_messages returns unread and User Label names. "
+        "gmail_mark_read, gmail_mark_unread, and gmail_modify_labels take message_ids "
+        "(1-25, no confirm). gmail_trash_message takes message_ids (1-25) with confirm=true. "
+        "User Labels are Gmail display names; System Labels cannot be changed via "
+        "gmail_modify_labels."
     ),
 )
 
@@ -636,6 +641,8 @@ def _gmail_error_payload(user_id: int, exc: Exception) -> str:
 def gmail_search_messages(query: str, max_results: int = 10) -> str:
     """Search the student's Gmail inbox with a Gmail query string.
 
+    Each result includes unread (bool) and labels (User Label names).
+
     Args:
         query: Gmail search query (e.g. from:alice newer_than:7d).
         max_results: Max messages to return (1-25).
@@ -878,21 +885,21 @@ def gmail_send_email(
 @mcp.tool(
     name="gmail_trash_message",
     annotations={
-        "title": "Move Gmail message to Trash",
+        "title": "Move Gmail messages to Trash",
         "readOnlyHint": False,
         "destructiveHint": True,
         "idempotentHint": False,
         "openWorldHint": True,
     },
 )
-def gmail_trash_message(message_id: str, confirm: bool = False) -> str:
-    """Move a Gmail message to Trash (not permanent delete).
+def gmail_trash_message(message_ids: list[str], confirm: bool = False) -> str:
+    """Move Gmail messages to Trash (not permanent delete).
 
     Typical flow: gmail_search_messages to find ids, then trash with confirm=true
-    after human approval.
+    after human approval. One confirmation covers the whole set (max 25).
 
     Args:
-        message_id: Gmail message id from search results.
+        message_ids: Gmail message ids from search results (1-25).
         confirm: Must be true to actually move to Trash.
     """
     timer = timed_tool()
@@ -903,19 +910,22 @@ def gmail_trash_message(message_id: str, confirm: bool = False) -> str:
         with timer:
             user_id = _require_user_id()
             if not confirm:
-                out = gmail_tools.to_json(
-                    gmail_tools.confirmation_required_payload(
-                        message_id=message_id, action="trash"
-                    )
+                result = gmail_tools.trash_message(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    message_ids=message_ids,
+                    confirm=False,
                 )
-                err = "confirmation_required"
+                out = gmail_tools.to_json(result)
+                err = result.get("error")
             else:
                 error_payload, conn = gmail_tools.ensure_gmail_ready(
                     user_id=user_id,
                     store=oauth_store,
                     oauth=google_oauth,
                     public_url=_public_url(),
-                    required_scopes=gmail_tools.GMAIL_TRASH_SCOPES,
+                    required_scopes=gmail_tools.GMAIL_MODIFY_SCOPES,
                 )
                 if error_payload is not None:
                     out = gmail_tools.to_json(error_payload)
@@ -926,10 +936,11 @@ def gmail_trash_message(message_id: str, confirm: bool = False) -> str:
                         user_id=user_id,
                         store=oauth_store,
                         oauth=google_oauth,
-                        message_id=message_id,
+                        message_ids=message_ids,
                         confirm=True,
                     )
                     out = gmail_tools.to_json(result)
+                    err = result.get("error")
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
@@ -943,6 +954,125 @@ def gmail_trash_message(message_id: str, confirm: bool = False) -> str:
         raise
     finally:
         _record("gmail_trash_message", ok, timer.latency_ms, err)
+
+
+def _run_gmail_modify(tool_name: str, fn, **kwargs) -> str:
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            error_payload, conn = gmail_tools.ensure_gmail_ready(
+                user_id=user_id,
+                store=oauth_store,
+                oauth=google_oauth,
+                public_url=_public_url(),
+                required_scopes=gmail_tools.GMAIL_MODIFY_SCOPES,
+            )
+            if error_payload is not None:
+                out = gmail_tools.to_json(error_payload)
+                err = error_payload.get("error")
+            else:
+                assert oauth_store is not None and google_oauth is not None and conn
+                result = fn(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                    **kwargs,
+                )
+                out = gmail_tools.to_json(result)
+                err = result.get("error")
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _gmail_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record(tool_name, ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="gmail_mark_read",
+    annotations={
+        "title": "Mark Gmail messages read",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def gmail_mark_read(message_ids: list[str]) -> str:
+    """Clear Unread on Gmail messages. Does not require confirm.
+
+    Args:
+        message_ids: Gmail message ids from search results (1-25).
+    """
+    return _run_gmail_modify(
+        "gmail_mark_read", gmail_tools.mark_read, message_ids=message_ids
+    )
+
+
+@mcp.tool(
+    name="gmail_mark_unread",
+    annotations={
+        "title": "Mark Gmail messages unread",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def gmail_mark_unread(message_ids: list[str]) -> str:
+    """Set Unread on Gmail messages. Does not require confirm.
+
+    Args:
+        message_ids: Gmail message ids from search results (1-25).
+    """
+    return _run_gmail_modify(
+        "gmail_mark_unread", gmail_tools.mark_unread, message_ids=message_ids
+    )
+
+
+@mcp.tool(
+    name="gmail_modify_labels",
+    annotations={
+        "title": "Add or remove Gmail User Labels",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def gmail_modify_labels(
+    message_ids: list[str],
+    add_labels: list[str] = [],
+    remove_labels: list[str] = [],
+) -> str:
+    """Add and/or remove User Labels on Gmail messages. Does not require confirm.
+
+    Names must match Gmail display names exactly after trimming whitespace.
+    System Labels (INBOX, UNREAD, TRASH, SPAM, STARRED, …) are rejected.
+
+    Args:
+        message_ids: Gmail message ids from search results (1-25).
+        add_labels: User Label names to add.
+        remove_labels: User Label names to remove.
+    """
+    return _run_gmail_modify(
+        "gmail_modify_labels",
+        gmail_tools.modify_labels,
+        message_ids=message_ids,
+        add_labels=add_labels,
+        remove_labels=remove_labels,
+    )
 
 
 def _tasks_error_payload(user_id: int, exc: Exception) -> str:

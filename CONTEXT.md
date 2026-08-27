@@ -15,3 +15,27 @@ _Avoid_: Guest, Invitee, 邀請人, Google EventAttendee
 **Attendee list**:
 The complete set of Attendees on a Calendar Event. Setting it replaces the previous set; it is not a list of people to add.
 _Avoid_: Invitation (the email Google sends), delta, guest list
+
+**Message**:
+A single Gmail message in the student's mailbox, identified by message_id. Search, trash, Unread changes, and User Label changes operate on one Message or several Messages.
+_Avoid_: Email, mail, thread
+
+**Thread**:
+A Gmail conversation of Messages, identified by thread_id. Summarize operates on a Thread.
+_Avoid_: Conversation, chain, Message
+
+**User Label**:
+A student-created named tag on a Message, identified by the name shown in Gmail, not Google's internal id. Adding or removing it does not require confirmation.
+_Avoid_: Tag, folder, category, System Label, Gmail label id
+
+**System Label**:
+A Gmail-owned label such as INBOX, UNREAD, TRASH, SPAM, or STARRED. The portal does not expose generic System Label changes.
+_Avoid_: Folder, User Label
+
+**Unread**:
+A Message the student has not marked read. Setting or clearing Unread does not require confirmation.
+_Avoid_: Unseen, new
+
+**Trash**:
+Moving one or more Messages to Trash. It is not a User Label change, it requires one confirmation for the whole set, and it is not permanent deletion.
+_Avoid_: Delete, remove, archive, TRASH label mutation

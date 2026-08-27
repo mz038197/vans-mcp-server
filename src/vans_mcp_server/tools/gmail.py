@@ -24,10 +24,11 @@ GMAIL_BASE_SCOPES = (
     GMAIL_READONLY_SCOPE,
     GMAIL_COMPOSE_SCOPE,
 )
-# Trash (messages.trash) needs modify; read/search/draft/send do not.
-GMAIL_TRASH_SCOPES = (*GMAIL_BASE_SCOPES, GMAIL_MODIFY_SCOPE)
-# Backward-compatible name for base (non-trash) Gmail tools.
+# messages.modify / trash need gmail.modify; read/search/draft/send do not.
+GMAIL_MODIFY_SCOPES = (*GMAIL_BASE_SCOPES, GMAIL_MODIFY_SCOPE)
+# Backward-compatible name for base (non-modify) Gmail tools.
 GMAIL_REQUIRED_SCOPES = GMAIL_BASE_SCOPES
+BATCH_MAX = 25
 
 
 def to_json(data: dict[str, Any]) -> str:
@@ -56,12 +57,12 @@ def confirmation_required_payload(
     *,
     to: str | None = None,
     subject: str | None = None,
-    message_id: str | None = None,
+    message_ids: list[str] | None = None,
     action: str = "send",
 ) -> dict[str, Any]:
     if action == "trash":
         message = (
-            "Refusing to move message to trash without confirm=true. "
+            "Refusing to move messages to trash without confirm=true. "
             "Ask the human to confirm, then call again with confirm=true."
         )
     else:
@@ -78,8 +79,8 @@ def confirmation_required_payload(
         payload["to"] = to
     if subject is not None:
         payload["subject"] = subject
-    if message_id is not None:
-        payload["message_id"] = message_id
+    if message_ids is not None:
+        payload["message_ids"] = message_ids
     if action == "send":
         payload["sent"] = False
     if action == "trash":
@@ -102,6 +103,32 @@ def _credentials(
 
 def _gmail_service(creds: Credentials):
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+def _label_catalog(service) -> dict[str, dict[str, Any]]:
+    """Map Gmail label id to the label resource (id, name, type)."""
+    listed = service.users().labels().list(userId="me").execute()
+    by_id: dict[str, dict[str, Any]] = {}
+    for item in listed.get("labels") or []:
+        label_id = item.get("id")
+        if not label_id:
+            continue
+        name = (item.get("name") or "").strip()
+        if name:
+            item = {**item, "name": name}
+        by_id[label_id] = item
+    return by_id
+
+
+def _user_label_names(
+    label_ids: list[str], catalog: dict[str, dict[str, Any]]
+) -> list[str]:
+    names: list[str] = []
+    for lid in label_ids:
+        item = catalog.get(lid)
+        if item and (item.get("type") or "") == "user" and item.get("name"):
+            names.append(item["name"])
+    return names
 
 
 def _header_map(payload: dict[str, Any]) -> dict[str, str]:
@@ -214,6 +241,7 @@ def search_messages(
 
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
     service = _gmail_service(creds)
+    catalog = _label_catalog(service)
     max_results = max(1, min(int(max_results), 25))
     listed = (
         service.users()
@@ -238,6 +266,7 @@ def search_messages(
             .execute()
         )
         headers = _header_map(full.get("payload") or {})
+        label_ids = list(full.get("labelIds") or [])
         messages.append(
             {
                 "id": msg_id,
@@ -247,6 +276,8 @@ def search_messages(
                 "to": headers.get("to"),
                 "subject": headers.get("subject"),
                 "date": headers.get("date"),
+                "unread": "UNREAD" in label_ids,
+                "labels": _user_label_names(label_ids, catalog),
             }
         )
     return {
@@ -395,30 +426,245 @@ def trash_message(
     user_id: int,
     store: OAuthConnectionStore,
     oauth: GoogleOAuthService,
-    message_id: str,
+    message_ids: list[str],
     confirm: bool = False,
 ) -> dict[str, Any]:
-    """Move a message to Trash (not permanent delete)."""
-    mid = (message_id or "").strip()
+    """Move messages to Trash (not permanent delete)."""
+    normalized = _normalize_message_ids(message_ids)
+    if isinstance(normalized, dict):
+        return normalized
     if not confirm:
-        return confirmation_required_payload(message_id=mid, action="trash")
+        return confirmation_required_payload(message_ids=normalized, action="trash")
+    conn = _require_modify_conn(user_id=user_id, store=store, oauth=oauth)
+    creds = _credentials(conn.access_token, conn.refresh_token, oauth)
+    service = _gmail_service(creds)
+
+    def _trash_one(mid: str) -> dict[str, str]:
+        result = service.users().messages().trash(userId="me", id=mid).execute()
+        return {"id": result.get("id") or mid}
+
+    out = _try_each_message(normalized, _trash_one)
+    out["trashed"] = bool(out["succeeded"]) and not out["failed"]
+    out["note"] = "Moved to Trash. Not permanently deleted."
+    return out
+
+
+def _unique_stripped(values: list[str] | None) -> list[str]:
+    seen: list[str] = []
+    seen_set: set[str] = set()
+    for item in values or []:
+        value = (item or "").strip()
+        if not value or value in seen_set:
+            continue
+        seen_set.add(value)
+        seen.append(value)
+    return seen
+
+
+def _normalize_message_ids(message_ids: list[str] | None) -> dict[str, Any] | list[str]:
+    seen = _unique_stripped(message_ids)
+    if not seen:
+        return {
+            "error": "invalid_message_ids",
+            "message": "message_ids must contain at least one id.",
+        }
+    if len(seen) > BATCH_MAX:
+        return {
+            "error": "batch_too_large",
+            "message": f"At most {BATCH_MAX} message ids per call.",
+            "max": BATCH_MAX,
+            "count": len(seen),
+        }
+    return seen
+
+
+def _require_modify_conn(
+    *,
+    user_id: int,
+    store: OAuthConnectionStore,
+    oauth: GoogleOAuthService,
+) -> Any:
     conn = store.get_valid_access_token(user_id)
     if conn is None:
         raise LookupError("not_connected")
-    if not scopes_include(conn.scopes, GMAIL_TRASH_SCOPES):
+    if not scopes_include(conn.scopes, GMAIL_MODIFY_SCOPES):
         raise PermissionError("missing_scopes")
-    if not mid:
-        raise ValueError("message_id is required")
+    return conn
 
+
+def _try_each_message(message_ids: list[str], fn) -> dict[str, Any]:
+    succeeded: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+    for mid in message_ids:
+        try:
+            # ponytail: one HTTP call per message. Gmail has no transactional
+            # batch; switch to BatchHttpRequest if 25 serial calls get too slow.
+            succeeded.append(fn(mid))
+        except Exception as exc:
+            failed.append({"id": mid, "error": str(exc)})
+    return {
+        "succeeded": succeeded,
+        "failed": failed,
+        "source": "gmail",
+    }
+
+
+def _run_modify_batch(
+    *,
+    user_id: int,
+    store: OAuthConnectionStore,
+    oauth: GoogleOAuthService,
+    message_ids: list[str],
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = _normalize_message_ids(message_ids)
+    if isinstance(normalized, dict):
+        return normalized
+    conn = _require_modify_conn(user_id=user_id, store=store, oauth=oauth)
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
     service = _gmail_service(creds)
-    result = service.users().messages().trash(userId="me", id=mid).execute()
-    return {
-        "trashed": True,
-        "id": result.get("id") or mid,
-        "threadId": result.get("threadId"),
-        "labelIds": result.get("labelIds"),
-        "source": "gmail",
-        "note": "Moved to Trash. Not permanently deleted.",
+
+    def _modify_one(mid: str) -> dict[str, str]:
+        result = (
+            service.users()
+            .messages()
+            .modify(userId="me", id=mid, body=body)
+            .execute()
+        )
+        return {"id": result.get("id") or mid}
+
+    return _try_each_message(normalized, _modify_one)
+
+
+def mark_read(
+    *,
+    user_id: int,
+    store: OAuthConnectionStore,
+    oauth: GoogleOAuthService,
+    message_ids: list[str],
+) -> dict[str, Any]:
+    return _run_modify_batch(
+        user_id=user_id,
+        store=store,
+        oauth=oauth,
+        message_ids=message_ids,
+        body={"removeLabelIds": ["UNREAD"]},
+    )
+
+
+def mark_unread(
+    *,
+    user_id: int,
+    store: OAuthConnectionStore,
+    oauth: GoogleOAuthService,
+    message_ids: list[str],
+) -> dict[str, Any]:
+    return _run_modify_batch(
+        user_id=user_id,
+        store=store,
+        oauth=oauth,
+        message_ids=message_ids,
+        body={"addLabelIds": ["UNREAD"]},
+    )
+
+
+def _system_label_hint(name: str) -> str:
+    if name == "UNREAD":
+        return (
+            "UNREAD is a System Label. "
+            "Use gmail_mark_read or gmail_mark_unread."
+        )
+    if name in {"TRASH", "SPAM"}:
+        return (
+            f"{name} is a System Label. "
+            "Use gmail_trash_message to move messages to Trash."
+        )
+    return (
+        f"{name} is a System Label. "
+        "This tool only adds or removes User Labels."
+    )
+
+
+def _resolve_user_label_ids(
+    catalog: dict[str, dict[str, Any]], names: list[str]
+) -> dict[str, Any] | list[str]:
+    by_name = {
+        item["name"]: item for item in catalog.values() if item.get("name")
     }
+    ids: list[str] = []
+    for name in names:
+        item = by_name.get(name)
+        if item is None:
+            return {
+                "error": "unknown_label",
+                "label": name,
+                "message": f"No User Label named {name!r}.",
+            }
+        if (item.get("type") or "") != "user":
+            return {
+                "error": "system_label_not_allowed",
+                "label": name,
+                "message": _system_label_hint(name),
+            }
+        ids.append(item["id"])
+    return ids
+
+
+def modify_labels(
+    *,
+    user_id: int,
+    store: OAuthConnectionStore,
+    oauth: GoogleOAuthService,
+    message_ids: list[str],
+    add_labels: list[str] | None = None,
+    remove_labels: list[str] | None = None,
+) -> dict[str, Any]:
+    normalized = _normalize_message_ids(message_ids)
+    if isinstance(normalized, dict):
+        return normalized
+    add_names = _unique_stripped(add_labels)
+    remove_names = _unique_stripped(remove_labels)
+    if not add_names and not remove_names:
+        return {
+            "error": "labels_required",
+            "message": "Provide add_labels and/or remove_labels.",
+        }
+    overlap = sorted(set(add_names) & set(remove_names))
+    if overlap:
+        return {
+            "error": "overlapping_labels",
+            "labels": overlap,
+            "message": "A name cannot be added and removed in the same call.",
+        }
+    conn = _require_modify_conn(user_id=user_id, store=store, oauth=oauth)
+    creds = _credentials(conn.access_token, conn.refresh_token, oauth)
+    service = _gmail_service(creds)
+    catalog = _label_catalog(service)
+    add_ids = _resolve_user_label_ids(catalog, add_names) if add_names else []
+    if isinstance(add_ids, dict):
+        return add_ids
+    remove_ids = (
+        _resolve_user_label_ids(catalog, remove_names) if remove_names else []
+    )
+    if isinstance(remove_ids, dict):
+        return remove_ids
+    body: dict[str, Any] = {}
+    if add_ids:
+        body["addLabelIds"] = add_ids
+    if remove_ids:
+        body["removeLabelIds"] = remove_ids
+
+    def _one(mid: str) -> dict[str, str]:
+        result = (
+            service.users()
+            .messages()
+            .modify(userId="me", id=mid, body=body)
+            .execute()
+        )
+        return {"id": result.get("id") or mid}
+
+    out = _try_each_message(normalized, _one)
+    out["add_labels"] = add_names
+    out["remove_labels"] = remove_names
+    return out
 

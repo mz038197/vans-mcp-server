@@ -48,7 +48,7 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-fly.ps1 -SecretsOnly
    - `https://www.googleapis.com/auth/calendar`
    - `https://www.googleapis.com/auth/gmail.readonly`
    - `https://www.googleapis.com/auth/gmail.compose`（含建草稿與寄信）
-   - `https://www.googleapis.com/auth/gmail.modify`（含移到垃圾桶；非永久刪除）
+   - `https://www.googleapis.com/auth/gmail.modify`（含移到垃圾桶、標已讀／未讀、改使用者標籤；非永久刪除）
    - `https://www.googleapis.com/auth/tasks`
    - 以及 openid / email / profile
 3. 同一個 OAuth Client 追加 Authorized redirect URIs：
@@ -59,7 +59,7 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-fly.ps1 -SecretsOnly
 
 學生流程：Agent 呼叫 `google_get_connect_url` → 瀏覽器授權 → 可用 `calendar_*`、`gmail_*` 與 `tasks_*`。  
 `gmail_send_email` / `gmail_trash_message` / `tasks_delete_task` 必須 `confirm=true` 才會執行。  
-篩選信件：用 `gmail_search_messages`（Gmail query）取得 `message_id`，再 trash。  
+篩選信件：用 `gmail_search_messages`（Gmail query；結果含 `unread` 與使用者標籤名稱）取得 id，再 `gmail_mark_read` / `gmail_mark_unread` / `gmail_modify_labels`（不必 confirm）或 `gmail_trash_message(message_ids, confirm=true)`（一批最多 25 封）。  
 完成任務：用 `tasks_update_task` 並傳 `status=completed`。
 
 ### 已知坑：refresh token 失效但 `connected=true`
