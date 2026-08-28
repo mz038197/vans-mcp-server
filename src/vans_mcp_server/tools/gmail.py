@@ -58,11 +58,17 @@ def confirmation_required_payload(
     to: str | None = None,
     subject: str | None = None,
     message_ids: list[str] | None = None,
+    label: str | None = None,
     action: str = "send",
 ) -> dict[str, Any]:
     if action == "trash":
         message = (
             "Refusing to move messages to trash without confirm=true. "
+            "Ask the human to confirm, then call again with confirm=true."
+        )
+    elif action == "delete_label":
+        message = (
+            "Refusing to delete User Label without confirm=true. "
             "Ask the human to confirm, then call again with confirm=true."
         )
     else:
@@ -81,10 +87,14 @@ def confirmation_required_payload(
         payload["subject"] = subject
     if message_ids is not None:
         payload["message_ids"] = message_ids
+    if label is not None:
+        payload["label"] = label
     if action == "send":
         payload["sent"] = False
     if action == "trash":
         payload["trashed"] = False
+    if action == "delete_label":
+        payload["deleted"] = False
     return payload
 
 
@@ -286,6 +296,28 @@ def search_messages(
         "messages": messages,
         "source": "gmail",
     }
+
+
+def list_user_labels(
+    *,
+    user_id: int,
+    store: OAuthConnectionStore,
+    oauth: GoogleOAuthService,
+) -> dict[str, Any]:
+    conn = store.get_valid_access_token(user_id)
+    if conn is None:
+        raise LookupError("not_connected")
+    if not scopes_include(conn.scopes, GMAIL_BASE_SCOPES):
+        raise PermissionError("missing_scopes")
+    creds = _credentials(conn.access_token, conn.refresh_token, oauth)
+    service = _gmail_service(creds)
+    catalog = _label_catalog(service)
+    names = sorted(
+        item["name"]
+        for item in catalog.values()
+        if (item.get("type") or "") == "user" and item.get("name")
+    )
+    return {"labels": names, "source": "gmail"}
 
 
 def summarize_thread(
@@ -581,33 +613,85 @@ def _system_label_hint(name: str) -> str:
         )
     return (
         f"{name} is a System Label. "
-        "This tool only adds or removes User Labels."
+        "The portal does not allow System Label changes."
     )
+
+
+def _label_by_name(catalog: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {item["name"]: item for item in catalog.values() if item.get("name")}
+
+
+def _unknown_label(name: str) -> dict[str, Any]:
+    return {
+        "error": "unknown_label",
+        "label": name,
+        "message": f"No User Label named {name!r}.",
+    }
+
+
+def _system_label_error(name: str) -> dict[str, Any]:
+    return {
+        "error": "system_label_not_allowed",
+        "label": name,
+        "message": _system_label_hint(name),
+    }
+
+
+def _reject_system_names(
+    catalog: dict[str, dict[str, Any]], names: list[str]
+) -> dict[str, Any] | None:
+    by_name = _label_by_name(catalog)
+    for name in names:
+        item = by_name.get(name)
+        if item is not None and (item.get("type") or "") != "user":
+            return _system_label_error(name)
+    return None
 
 
 def _resolve_user_label_ids(
     catalog: dict[str, dict[str, Any]], names: list[str]
 ) -> dict[str, Any] | list[str]:
-    by_name = {
-        item["name"]: item for item in catalog.values() if item.get("name")
-    }
+    by_name = _label_by_name(catalog)
     ids: list[str] = []
     for name in names:
         item = by_name.get(name)
         if item is None:
-            return {
-                "error": "unknown_label",
-                "label": name,
-                "message": f"No User Label named {name!r}.",
-            }
+            return _unknown_label(name)
         if (item.get("type") or "") != "user":
-            return {
-                "error": "system_label_not_allowed",
-                "label": name,
-                "message": _system_label_hint(name),
-            }
+            return _system_label_error(name)
         ids.append(item["id"])
     return ids
+
+
+def _ids_for_add(
+    service,
+    catalog: dict[str, dict[str, Any]],
+    names: list[str],
+) -> dict[str, Any] | tuple[list[str], list[str]]:
+    by_name = _label_by_name(catalog)
+    ids: list[str] = []
+    created: list[str] = []
+    for name in names:
+        item = by_name.get(name)
+        if item is None:
+            created_item = (
+                service.users()
+                .labels()
+                .create(userId="me", body={"name": name})
+                .execute()
+            )
+            label_id = created_item.get("id")
+            if not label_id:
+                return _unknown_label(name)
+            created_name = (created_item.get("name") or name).strip()
+            item = {**created_item, "id": label_id, "name": created_name}
+            catalog[label_id] = item
+            by_name[created_name] = item
+            created.append(name)
+            ids.append(label_id)
+            continue
+        ids.append(item["id"])
+    return ids, created
 
 
 def modify_labels(
@@ -640,14 +724,20 @@ def modify_labels(
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
     service = _gmail_service(creds)
     catalog = _label_catalog(service)
-    add_ids = _resolve_user_label_ids(catalog, add_names) if add_names else []
-    if isinstance(add_ids, dict):
-        return add_ids
+    blocked = _reject_system_names(catalog, add_names + remove_names)
+    if blocked is not None:
+        return blocked
     remove_ids = (
         _resolve_user_label_ids(catalog, remove_names) if remove_names else []
     )
     if isinstance(remove_ids, dict):
         return remove_ids
+    add_result: dict[str, Any] | tuple[list[str], list[str]] = (
+        _ids_for_add(service, catalog, add_names) if add_names else ([], [])
+    )
+    if isinstance(add_result, dict):
+        return add_result
+    add_ids, created_labels = add_result
     body: dict[str, Any] = {}
     if add_ids:
         body["addLabelIds"] = add_ids
@@ -666,5 +756,39 @@ def modify_labels(
     out = _try_each_message(normalized, _one)
     out["add_labels"] = add_names
     out["remove_labels"] = remove_names
+    out["created_labels"] = created_labels
     return out
+
+
+def delete_label(
+    *,
+    user_id: int,
+    store: OAuthConnectionStore,
+    oauth: GoogleOAuthService,
+    name: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    trimmed = (name or "").strip()
+    if not trimmed:
+        return {
+            "error": "label_required",
+            "message": "Provide a User Label name.",
+        }
+    conn = _require_modify_conn(user_id=user_id, store=store, oauth=oauth)
+    creds = _credentials(conn.access_token, conn.refresh_token, oauth)
+    service = _gmail_service(creds)
+    catalog = _label_catalog(service)
+    resolved = _resolve_user_label_ids(catalog, [trimmed])
+    if isinstance(resolved, dict):
+        return resolved
+    if not confirm:
+        return confirmation_required_payload(
+            label=trimmed, action="delete_label"
+        )
+    service.users().labels().delete(userId="me", id=resolved[0]).execute()
+    return {
+        "deleted": True,
+        "label": trimmed,
+        "source": "gmail",
+    }
 

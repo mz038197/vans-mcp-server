@@ -1,0 +1,5 @@
+# User Labels create-on-add; deletion is a confirmed single name
+
+Adding a User Label to Messages creates the name if it is missing; that path does not require confirmation, because tagging is the dungeon workflow and a separate create step would recreate `unknown_label`. Removing a User Label from Messages still fails if the name does not exist. User Label deletion is a different act: one exact display name per call, `confirm=true`, even when Messages still have it. A missing name is `unknown_label`, not success. A slash is part of the name; deletion does not cascade. Agents can list User Label names (read-only) so they are not guessing. System Labels stay rejected. Rename, color, and visibility are out of scope.
+
+Considered: a dedicated create tool (two calls, agents forget); confirm only when a name is new (splits one tagging call into a confirm round-trip); refuse deletion while any Message still has the label (makes typo cleanup unusable); batch deletion like Trash (blast radius is the whole mailbox taxonomy, not a search result list); Gmail-UI parent cascade (API is per name, and Folder is not in this language).

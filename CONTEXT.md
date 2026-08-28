@@ -25,8 +25,12 @@ A Gmail conversation of Messages, identified by thread_id. Summarize operates on
 _Avoid_: Conversation, chain, Message
 
 **User Label**:
-A student-created named tag on a Message, identified by the name shown in Gmail, not Google's internal id. Adding or removing it does not require confirmation.
-_Avoid_: Tag, folder, category, System Label, Gmail label id
+A named tag in the mailbox, identified by the exact name shown in Gmail (a slash is part of that name, not a folder), not Google's internal id. The student or the agent may create or delete it; adding a name that does not yet exist creates it. Adding or removing it on a Message does not require confirmation.
+_Avoid_: Tag, folder, category, System Label, Gmail label id, parent/child label
+
+**User Label deletion**:
+Permanently destroying one User Label by name. It strips that name from every Message that had it; Messages themselves are not Trashed. It requires confirmation. A name that does not exist is not treated as already deleted.
+_Avoid_: Removing a User Label from Messages, Trash, cascade, nested delete
 
 **System Label**:
 A Gmail-owned label such as INBOX, UNREAD, TRASH, SPAM, or STARRED. The portal does not expose generic System Label changes.

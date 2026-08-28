@@ -433,12 +433,11 @@ def test_modify_labels_rejects_overlapping_names():
     assert result["error"] == "overlapping_labels"
 
 
-def test_modify_labels_rejects_system_and_unknown_names_without_mutating():
+def test_modify_labels_rejects_system_and_unknown_remove_without_mutating():
     store = _store()
     fake_service = MagicMock()
-    fake_service.users.return_value.labels.return_value.list.return_value.execute.return_value = (
-        _LABELS
-    )
+    labels = fake_service.users.return_value.labels.return_value
+    labels.list.return_value.execute.return_value = _LABELS
     modify = fake_service.users.return_value.messages.return_value.modify
     with patch("vans_mcp_server.tools.gmail._gmail_service", return_value=fake_service):
         system = gmail_tools.modify_labels(
@@ -457,26 +456,97 @@ def test_modify_labels_rejects_system_and_unknown_names_without_mutating():
             add_labels=["UNREAD"],
             remove_labels=[],
         )
-        missing = gmail_tools.modify_labels(
+        missing_remove = gmail_tools.modify_labels(
             user_id=1,
             store=store,
             oauth=_oauth(),
             message_ids=["m1"],
-            add_labels=["不存在"],
-            remove_labels=[],
+            add_labels=[],
+            remove_labels=["不存在"],
         )
     assert system["error"] == "system_label_not_allowed"
     assert unread["error"] == "system_label_not_allowed"
-    assert missing["error"] == "unknown_label"
+    assert missing_remove["error"] == "unknown_label"
     modify.assert_not_called()
+    labels.create.assert_not_called()
 
 
-def test_modify_labels_trims_and_requires_exact_name():
+def test_modify_labels_creates_missing_add_name_without_confirm():
     store = _store()
     fake_service = MagicMock()
-    fake_service.users.return_value.labels.return_value.list.return_value.execute.return_value = (
-        _LABELS
+    labels = fake_service.users.return_value.labels.return_value
+    labels.list.return_value.execute.return_value = _LABELS
+    labels.create.return_value.execute.return_value = {
+        "id": "Label_3",
+        "name": "Justin Welsh",
+        "type": "user",
+    }
+    modify = fake_service.users.return_value.messages.return_value.modify
+    modify.return_value.execute.return_value = {"id": "m1"}
+    with patch("vans_mcp_server.tools.gmail._gmail_service", return_value=fake_service):
+        result = gmail_tools.modify_labels(
+            user_id=1,
+            store=store,
+            oauth=_oauth(),
+            message_ids=["m1"],
+            add_labels=["Justin Welsh"],
+            remove_labels=[],
+        )
+    assert result.get("error") is None
+    assert result["succeeded"] == [{"id": "m1"}]
+    assert result["created_labels"] == ["Justin Welsh"]
+    labels.create.assert_called_once_with(
+        userId="me", body={"name": "Justin Welsh"}
     )
+    modify.assert_called_once_with(
+        userId="me",
+        id="m1",
+        body={"addLabelIds": ["Label_3"]},
+    )
+
+
+def test_modify_labels_does_not_create_when_remove_name_is_unknown():
+    store = _store()
+    fake_service = MagicMock()
+    labels = fake_service.users.return_value.labels.return_value
+    labels.list.return_value.execute.return_value = _LABELS
+    with patch("vans_mcp_server.tools.gmail._gmail_service", return_value=fake_service):
+        result = gmail_tools.modify_labels(
+            user_id=1,
+            store=store,
+            oauth=_oauth(),
+            message_ids=["m1"],
+            add_labels=["Justin Welsh"],
+            remove_labels=["不存在"],
+        )
+    assert result["error"] == "unknown_label"
+    labels.create.assert_not_called()
+    fake_service.users.return_value.messages.return_value.modify.assert_not_called()
+
+
+def test_modify_labels_does_not_create_when_add_includes_system_name():
+    store = _store()
+    fake_service = MagicMock()
+    labels = fake_service.users.return_value.labels.return_value
+    labels.list.return_value.execute.return_value = _LABELS
+    with patch("vans_mcp_server.tools.gmail._gmail_service", return_value=fake_service):
+        result = gmail_tools.modify_labels(
+            user_id=1,
+            store=store,
+            oauth=_oauth(),
+            message_ids=["m1"],
+            add_labels=["Justin Welsh", "INBOX"],
+            remove_labels=[],
+        )
+    assert result["error"] == "system_label_not_allowed"
+    labels.create.assert_not_called()
+
+
+def test_modify_labels_trims_and_reuses_existing_name():
+    store = _store()
+    fake_service = MagicMock()
+    labels = fake_service.users.return_value.labels.return_value
+    labels.list.return_value.execute.return_value = _LABELS
     modify = fake_service.users.return_value.messages.return_value.modify
     modify.return_value.execute.return_value = {"id": "m1"}
     with patch("vans_mcp_server.tools.gmail._gmail_service", return_value=fake_service):
@@ -488,18 +558,164 @@ def test_modify_labels_trims_and_requires_exact_name():
             add_labels=[" 作業 "],
             remove_labels=["待辦"],
         )
-        wrong_case = gmail_tools.modify_labels(
-            user_id=1,
-            store=store,
-            oauth=_oauth(),
-            message_ids=["m1"],
-            add_labels=["homework"],
-            remove_labels=[],
-        )
     assert ok["succeeded"] == [{"id": "m1"}]
+    assert ok["created_labels"] == []
+    labels.create.assert_not_called()
     modify.assert_called_with(
         userId="me",
         id="m1",
         body={"addLabelIds": ["Label_1"], "removeLabelIds": ["Label_2"]},
     )
-    assert wrong_case["error"] == "unknown_label"
+
+
+def test_list_user_labels_returns_user_names_only():
+    store = _store(_BASE_GMAIL)
+    fake_service = MagicMock()
+    fake_service.users.return_value.labels.return_value.list.return_value.execute.return_value = (
+        _LABELS
+    )
+    with patch("vans_mcp_server.tools.gmail._gmail_service", return_value=fake_service):
+        result = gmail_tools.list_user_labels(
+            user_id=1, store=store, oauth=_oauth()
+        )
+    assert result["labels"] == ["作業", "待辦"]
+    assert "INBOX" not in result["labels"]
+
+
+def test_list_user_labels_includes_nested_name_as_one_string():
+    store = _store(_BASE_GMAIL)
+    fake_service = MagicMock()
+    fake_service.users.return_value.labels.return_value.list.return_value.execute.return_value = {
+        "labels": [
+            {"id": "INBOX", "name": "INBOX", "type": "system"},
+            {"id": "Label_w", "name": "Work", "type": "user"},
+            {
+                "id": "Label_wj",
+                "name": "Work/Justin Welsh",
+                "type": "user",
+            },
+        ]
+    }
+    with patch("vans_mcp_server.tools.gmail._gmail_service", return_value=fake_service):
+        result = gmail_tools.list_user_labels(
+            user_id=1, store=store, oauth=_oauth()
+        )
+    assert result["labels"] == ["Work", "Work/Justin Welsh"]
+
+
+def test_delete_label_requires_confirm_when_name_exists():
+    store = _store()
+    fake_service = MagicMock()
+    labels = fake_service.users.return_value.labels.return_value
+    labels.list.return_value.execute.return_value = _LABELS
+    with patch("vans_mcp_server.tools.gmail._gmail_service", return_value=fake_service):
+        result = gmail_tools.delete_label(
+            user_id=1,
+            store=store,
+            oauth=_oauth(),
+            name="作業",
+            confirm=False,
+        )
+    assert result["error"] == "confirmation_required"
+    assert result["label"] == "作業"
+    assert result["deleted"] is False
+    labels.delete.assert_not_called()
+
+
+def test_delete_label_with_confirm_deletes_even_if_on_messages():
+    store = _store()
+    fake_service = MagicMock()
+    labels = fake_service.users.return_value.labels.return_value
+    labels.list.return_value.execute.return_value = _LABELS
+    labels.delete.return_value.execute.return_value = {}
+    with patch("vans_mcp_server.tools.gmail._gmail_service", return_value=fake_service):
+        result = gmail_tools.delete_label(
+            user_id=1,
+            store=store,
+            oauth=_oauth(),
+            name=" 作業 ",
+            confirm=True,
+        )
+    assert result["deleted"] is True
+    assert result["label"] == "作業"
+    labels.delete.assert_called_once_with(userId="me", id="Label_1")
+
+
+def test_delete_label_unknown_and_system_without_deleting():
+    store = _store()
+    fake_service = MagicMock()
+    labels = fake_service.users.return_value.labels.return_value
+    labels.list.return_value.execute.return_value = _LABELS
+    with patch("vans_mcp_server.tools.gmail._gmail_service", return_value=fake_service):
+        missing = gmail_tools.delete_label(
+            user_id=1,
+            store=store,
+            oauth=_oauth(),
+            name="Justin Welsh",
+            confirm=True,
+        )
+        system = gmail_tools.delete_label(
+            user_id=1,
+            store=store,
+            oauth=_oauth(),
+            name="INBOX",
+            confirm=True,
+        )
+    assert missing["error"] == "unknown_label"
+    assert system["error"] == "system_label_not_allowed"
+    labels.delete.assert_not_called()
+
+
+def test_delete_label_does_not_cascade_nested_names():
+    store = _store()
+    fake_service = MagicMock()
+    labels = fake_service.users.return_value.labels.return_value
+    labels.list.return_value.execute.return_value = {
+        "labels": [
+            {"id": "Label_w", "name": "Work", "type": "user"},
+            {
+                "id": "Label_wj",
+                "name": "Work/Justin Welsh",
+                "type": "user",
+            },
+        ]
+    }
+    labels.delete.return_value.execute.return_value = {}
+    with patch("vans_mcp_server.tools.gmail._gmail_service", return_value=fake_service):
+        result = gmail_tools.delete_label(
+            user_id=1,
+            store=store,
+            oauth=_oauth(),
+            name="Work",
+            confirm=True,
+        )
+    assert result["deleted"] is True
+    labels.delete.assert_called_once_with(userId="me", id="Label_w")
+
+
+def test_delete_label_rejects_empty_name_without_calling_gmail():
+    store = _store()
+    result = gmail_tools.delete_label(
+        user_id=1,
+        store=store,
+        oauth=_oauth(),
+        name="  ",
+        confirm=True,
+    )
+    assert result["error"] == "label_required"
+    store.get_valid_access_token.assert_not_called()
+
+
+def test_delete_label_requires_modify_scope():
+    store = _store(_BASE_GMAIL)
+    try:
+        gmail_tools.delete_label(
+            user_id=1,
+            store=store,
+            oauth=_oauth(),
+            name="作業",
+            confirm=True,
+        )
+        assert False, "expected PermissionError"
+    except PermissionError:
+        pass

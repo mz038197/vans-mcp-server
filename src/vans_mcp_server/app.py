@@ -52,13 +52,18 @@ mcp = FastMCP(
         "Google tools require /connect/google authorization separate from portal login. "
         "Discord uses each student's own bot: discord_get_connect_url (paste token in "
         "browser, never in chat), then invite bot to the classroom guild. "
-        "gmail_send_email, gmail_trash_message, calendar_delete_event, tasks_delete_task, "
+        "gmail_send_email, gmail_trash_message, gmail_delete_label, "
+        "calendar_delete_event, tasks_delete_task, "
         "and discord_send_message require confirm=true. "
         "gmail_search_messages returns unread and User Label names. "
+        "gmail_list_labels lists User Label names (read-only). "
         "gmail_mark_read, gmail_mark_unread, and gmail_modify_labels take message_ids "
-        "(1-25, no confirm). gmail_trash_message takes message_ids (1-25) with confirm=true. "
+        "(1-25, no confirm). gmail_modify_labels add_labels creates a missing User Label; "
+        "remove_labels fails if the name does not exist. "
+        "gmail_trash_message takes message_ids (1-25) with confirm=true. "
+        "gmail_delete_label takes one User Label name with confirm=true. "
         "User Labels are Gmail display names; System Labels cannot be changed via "
-        "gmail_modify_labels."
+        "gmail_modify_labels or gmail_delete_label."
     ),
 )
 
@@ -1059,11 +1064,13 @@ def gmail_modify_labels(
     """Add and/or remove User Labels on Gmail messages. Does not require confirm.
 
     Names must match Gmail display names exactly after trimming whitespace.
+    A missing add_labels name is created, then added. remove_labels still
+    fails if the name does not exist. A slash is part of the name, not a folder.
     System Labels (INBOX, UNREAD, TRASH, SPAM, STARRED, …) are rejected.
 
     Args:
         message_ids: Gmail message ids from search results (1-25).
-        add_labels: User Label names to add.
+        add_labels: User Label names to add. Missing names are created.
         remove_labels: User Label names to remove.
     """
     return _run_gmail_modify(
@@ -1072,6 +1079,90 @@ def gmail_modify_labels(
         message_ids=message_ids,
         add_labels=add_labels,
         remove_labels=remove_labels,
+    )
+
+
+@mcp.tool(
+    name="gmail_list_labels",
+    annotations={
+        "title": "List Gmail User Labels",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def gmail_list_labels() -> str:
+    """List User Label names in the mailbox. Read-only. Does not require confirm.
+
+    Returns display names only, including names not on any Message.
+    System Labels are omitted.
+    """
+    timer = timed_tool()
+    ok = False
+    err: str | None = None
+    out = ""
+    try:
+        with timer:
+            user_id = _require_user_id()
+            error_payload, conn = gmail_tools.ensure_gmail_ready(
+                user_id=user_id,
+                store=oauth_store,
+                oauth=google_oauth,
+                public_url=_public_url(),
+            )
+            if error_payload is not None:
+                out = gmail_tools.to_json(error_payload)
+                err = error_payload.get("error")
+            else:
+                assert oauth_store is not None and google_oauth is not None and conn
+                result = gmail_tools.list_user_labels(
+                    user_id=user_id,
+                    store=oauth_store,
+                    oauth=google_oauth,
+                )
+                out = gmail_tools.to_json(result)
+        ok = True
+        return out
+    except (LookupError, PermissionError) as exc:
+        user_id = _user_id() or 0
+        out = _gmail_error_payload(user_id, exc)
+        err = type(exc).__name__
+        ok = True
+        return out
+    except Exception as exc:
+        err = type(exc).__name__
+        raise
+    finally:
+        _record("gmail_list_labels", ok, timer.latency_ms, err)
+
+
+@mcp.tool(
+    name="gmail_delete_label",
+    annotations={
+        "title": "Delete a Gmail User Label",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+def gmail_delete_label(name: str, confirm: bool = False) -> str:
+    """Permanently delete one User Label by Gmail display name.
+
+    Strips that name from every Message that had it; Messages are not Trashed.
+    Requires confirm=true. A missing name is unknown_label, not success.
+    A slash is part of the name; deletion does not cascade.
+
+    Args:
+        name: User Label display name (exactly one).
+        confirm: Must be true to actually delete the User Label.
+    """
+    return _run_gmail_modify(
+        "gmail_delete_label",
+        gmail_tools.delete_label,
+        name=name,
+        confirm=confirm,
     )
 
 

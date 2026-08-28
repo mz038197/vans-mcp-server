@@ -58,8 +58,8 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-fly.ps1 -SecretsOnly
 5. 若學生先前只授權部分 scopes（例如尚未含 Tasks）：請再用 `google_get_connect_url` **重連一次**
 
 學生流程：Agent 呼叫 `google_get_connect_url` → 瀏覽器授權 → 可用 `calendar_*`、`gmail_*` 與 `tasks_*`。  
-`gmail_send_email` / `gmail_trash_message` / `tasks_delete_task` 必須 `confirm=true` 才會執行。  
-篩選信件：用 `gmail_search_messages`（Gmail query；結果含 `unread` 與使用者標籤名稱）取得 id，再 `gmail_mark_read` / `gmail_mark_unread` / `gmail_modify_labels`（不必 confirm）或 `gmail_trash_message(message_ids, confirm=true)`（一批最多 25 封）。  
+`gmail_send_email` / `gmail_trash_message` / `gmail_delete_label` / `tasks_delete_task` 必須 `confirm=true` 才會執行。  
+篩選信件：用 `gmail_search_messages`（Gmail query；結果含 `unread` 與使用者標籤名稱）取得 id，再 `gmail_mark_read` / `gmail_mark_unread` / `gmail_modify_labels`（不必 confirm；`add_labels` 沒有的名稱會新建）或 `gmail_trash_message(message_ids, confirm=true)`（一批最多 25 封）。列出 User Label：`gmail_list_labels`。毀掉一個 User Label：`gmail_delete_label(name, confirm=true)`。  
 完成任務：用 `tasks_update_task` 並傳 `status=completed`。
 
 ### 已知坑：refresh token 失效但 `connected=true`
