@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_access_token
+from googleapiclient.errors import HttpError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -17,6 +18,7 @@ from vans_mcp_server.auth import VcrApiKeyVerifier, api_key_http_middleware
 from vans_mcp_server.oauth.discord_connect import DiscordConnectState
 from vans_mcp_server.oauth.google import GoogleOAuthService
 from vans_mcp_server.oauth.store import OAuthConnectionStore
+from vans_mcp_server.signal_forwarder import start_signal_forwarding
 from vans_mcp_server.tools import calendar as calendar_tools
 from vans_mcp_server.tools import discord as discord_tools
 from vans_mcp_server.tools import gmail as gmail_tools
@@ -29,6 +31,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("vans_mcp_server")
+_signal_forwarder = start_signal_forwarding()
 
 usage = UsageLogger.from_env()
 auth = VcrApiKeyVerifier.from_env()
@@ -105,6 +108,56 @@ def _require_user_id() -> int:
     return user_id
 
 
+def _http_status_and_body(exc: BaseException) -> tuple[int | None, str]:
+    if isinstance(exc, HttpError):
+        status = getattr(exc, "status_code", None)
+        if status is None:
+            status = getattr(getattr(exc, "resp", None), "status", None)
+        content = exc.content or b""
+        if isinstance(content, bytes):
+            body = content.decode("utf-8", errors="replace")
+        else:
+            body = str(content)
+        return (int(status) if status else None), body
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        return exc.response.status_code, exc.response.text or ""
+    return None, str(exc)
+
+
+def _is_invalid_grant(exc: BaseException) -> bool:
+    from google.auth.exceptions import RefreshError
+
+    status, body = _http_status_and_body(exc)
+    blob = f"{body} {exc}"
+    if "invalid_grant" not in blob:
+        return False
+    if isinstance(exc, RefreshError):
+        return True
+    if status is not None and 400 <= status < 500:
+        return True
+    return False
+
+
+def _forwards_as_signal(exc: BaseException) -> bool:
+    if isinstance(exc, (LookupError, PermissionError, ValueError)):
+        return False
+    if _is_invalid_grant(exc):
+        return False
+    status, body = _http_status_and_body(exc)
+    if status == 401 and "invalid_client" in body:
+        return True
+    if status == 429:
+        return True
+    if status is not None and 400 <= status < 500:
+        return False
+    return True
+
+
+def _log_unexpected_failure(exc: BaseException) -> None:
+    if _forwards_as_signal(exc):
+        logger.exception("unexpected tool failure")
+
+
 @mcp.tool(
     name="notion_search_pages",
     annotations={
@@ -134,6 +187,7 @@ def notion_search_pages(query: str, limit: int = 5) -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("notion_search_pages", ok, timer.latency_ms, err)
@@ -167,6 +221,7 @@ def notion_read_page(page_id: str) -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("notion_read_page", ok, timer.latency_ms, err)
@@ -206,6 +261,7 @@ def google_get_connect_url() -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("google_get_connect_url", ok, timer.latency_ms, err)
@@ -300,6 +356,7 @@ def calendar_list_events(
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("calendar_list_events", ok, timer.latency_ms, err)
@@ -368,6 +425,7 @@ def calendar_find_free_time(
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("calendar_find_free_time", ok, timer.latency_ms, err)
@@ -444,6 +502,7 @@ def calendar_create_event(
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("calendar_create_event", ok, timer.latency_ms, err)
@@ -531,6 +590,7 @@ def calendar_update_event(
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("calendar_update_event", ok, timer.latency_ms, err)
@@ -605,6 +665,7 @@ def calendar_delete_event(event_id: str, confirm: bool = False) -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("calendar_delete_event", ok, timer.latency_ms, err)
@@ -688,6 +749,7 @@ def gmail_search_messages(query: str, max_results: int = 10) -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("gmail_search_messages", ok, timer.latency_ms, err)
@@ -746,6 +808,7 @@ def gmail_summarize_thread(thread_id: str, max_messages: int = 10) -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("gmail_summarize_thread", ok, timer.latency_ms, err)
@@ -806,6 +869,7 @@ def gmail_create_draft(to: str, subject: str, body: str = "") -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("gmail_create_draft", ok, timer.latency_ms, err)
@@ -882,6 +946,7 @@ def gmail_send_email(
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("gmail_send_email", ok, timer.latency_ms, err)
@@ -956,6 +1021,7 @@ def gmail_trash_message(message_ids: list[str], confirm: bool = False) -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("gmail_trash_message", ok, timer.latency_ms, err)
@@ -999,6 +1065,7 @@ def _run_gmail_modify(tool_name: str, fn, **kwargs) -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record(tool_name, ok, timer.latency_ms, err)
@@ -1132,6 +1199,7 @@ def gmail_list_labels() -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("gmail_list_labels", ok, timer.latency_ms, err)
@@ -1240,6 +1308,7 @@ def tasks_list_tasklists(max_results: int = 20) -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("tasks_list_tasklists", ok, timer.latency_ms, err)
@@ -1304,6 +1373,7 @@ def tasks_list_tasks(
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("tasks_list_tasks", ok, timer.latency_ms, err)
@@ -1371,6 +1441,7 @@ def tasks_create_task(
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("tasks_create_task", ok, timer.latency_ms, err)
@@ -1446,6 +1517,7 @@ def tasks_update_task(
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("tasks_update_task", ok, timer.latency_ms, err)
@@ -1526,6 +1598,7 @@ def tasks_delete_task(
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("tasks_delete_task", ok, timer.latency_ms, err)
@@ -1583,6 +1656,7 @@ def discord_get_connect_url() -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("discord_get_connect_url", ok, timer.latency_ms, err)
@@ -1624,6 +1698,7 @@ def discord_list_channels() -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("discord_list_channels", ok, timer.latency_ms, err)
@@ -1675,6 +1750,7 @@ def discord_read_messages(channel_id: str, limit: int = 20) -> str:
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("discord_read_messages", ok, timer.latency_ms, err)
@@ -1741,6 +1817,7 @@ def discord_send_message(
         return out
     except Exception as exc:
         err = type(exc).__name__
+        _log_unexpected_failure(exc)
         raise
     finally:
         _record("discord_send_message", ok, timer.latency_ms, err)
@@ -1830,7 +1907,16 @@ async def connect_google_callback(request: Request) -> HTMLResponse:
                 status_code=400,
             )
         oauth_store.upsert_google_tokens(user_id=user_id, bundle=bundle)
-    except Exception:
+    except Exception as exc:
+        if _is_invalid_grant(exc):
+            logger.warning(
+                "google connect callback invalid_grant user_id=%s", user_id
+            )
+            return HTMLResponse(
+                "<h1>Failed to save Google connection</h1>"
+                "<p>Check server logs and try again.</p>",
+                status_code=500,
+            )
         logger.exception("google connect callback failed user_id=%s", user_id)
         return HTMLResponse(
             "<h1>Failed to save Google connection</h1>"
@@ -1955,7 +2041,15 @@ async def connect_discord_submit(request: Request) -> HTMLResponse:
             application_id=application_id,
             bot_user_id=bot_user_id,
         )
-    except httpx.HTTPStatusError:
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response is not None else 0
+        if status >= 500:
+            logger.exception("discord connect submit failed user_id=%s", user_id)
+            return HTMLResponse(
+                "<h1>Discord 暫時有問題</h1>"
+                "<p>請稍後再用新的連線連結試一次。</p>",
+                status_code=502,
+            )
         logger.warning("discord bot token verify failed user_id=%s", user_id)
         return HTMLResponse(
             "<h1>Invalid Bot Token</h1>"

@@ -217,17 +217,24 @@ def _require_ready(
     return conn.bot_token, guild_id
 
 
+def _raise_if_server_error(resp: httpx.Response) -> None:
+    if resp.status_code >= 500:
+        resp.raise_for_status()
+
+
 def _bot_in_guild(client: httpx.Client, *, bot_token: str, guild_id: str) -> bool:
     resp = client.get(
         f"{DISCORD_API}/users/@me/guilds",
         headers=_auth_headers(bot_token),
     )
+    _raise_if_server_error(resp)
     if resp.status_code == 403:
         # Some bots cannot list guilds; fall back to guild fetch.
         g = client.get(
             f"{DISCORD_API}/guilds/{guild_id}",
             headers=_auth_headers(bot_token),
         )
+        _raise_if_server_error(g)
         return g.status_code == 200
     if resp.status_code != 200:
         return False
