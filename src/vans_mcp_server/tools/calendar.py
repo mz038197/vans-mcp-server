@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -123,8 +123,14 @@ def _parse_in_timezone(text: str, tz_name: str) -> datetime:
         raise ToolArgumentError("empty datetime")
     if raw.endswith("Z"):
         raw = raw[:-1] + "+00:00"
-    dt = datetime.fromisoformat(raw)
-    tz = ZoneInfo(tz_name)
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ToolArgumentError(f"invalid datetime: {raw!r}; expected ISO-8601") from exc
+    try:
+        tz = ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ToolArgumentError(f"unknown timezone: {tz_name!r}") from exc
     if dt.tzinfo is None:
         return dt.replace(tzinfo=tz)
     return dt.astimezone(tz)

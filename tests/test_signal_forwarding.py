@@ -408,6 +408,71 @@ def test_exact_lookup_and_permission_errors_post_no_signal(signals, monkeypatch,
     _assert_no_signal(receiver)
 
 
+def _bad_calendar_calls():
+    valid_start = "2026-01-01T00:00:00"
+    valid_end = "2026-01-02T00:00:00"
+    return [
+        (
+            "list-datetime",
+            lambda app: app.calendar_list_events("next tuesday", valid_end),
+            "next tuesday",
+        ),
+        (
+            "list-timezone",
+            lambda app: app.calendar_list_events(
+                valid_start, valid_end, timezone_name="Asia/Taipe"
+            ),
+            "Asia/Taipe",
+        ),
+        (
+            "create-datetime",
+            lambda app: app.calendar_create_event("standup", "next tuesday", valid_end),
+            "next tuesday",
+        ),
+        (
+            "create-timezone",
+            lambda app: app.calendar_create_event(
+                "standup", valid_start, valid_end, timezone_name="Asia/Taipe"
+            ),
+            "Asia/Taipe",
+        ),
+        (
+            "update-datetime",
+            lambda app: app.calendar_update_event(
+                "evt1", start="next tuesday", end=valid_end
+            ),
+            "next tuesday",
+        ),
+        (
+            "update-timezone",
+            lambda app: app.calendar_update_event(
+                "evt1",
+                start=valid_start,
+                end=valid_end,
+                timezone_name="Asia/Taipe",
+            ),
+            "Asia/Taipe",
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("_name", "call", "needle"),
+    _bad_calendar_calls(),
+    ids=[name for name, _call, _needle in _bad_calendar_calls()],
+)
+def test_bad_calendar_datetime_or_timezone_posts_no_signal(
+    signals, monkeypatch, _name, call, needle
+):
+    app_module, receiver = signals
+    _bypass_auth(app_module, monkeypatch)
+    _google_ready(app_module)
+    with pytest.raises(ToolArgumentError, match=needle) as raised:
+        call(app_module)
+    assert type(raised.value) is ToolArgumentError
+    _assert_no_signal(receiver)
+
+
 @pytest.mark.parametrize("status", [400, 403, 404, 409])
 def test_other_google_4xx_posts_no_signal(signals, monkeypatch, status):
     app_module, receiver = signals
