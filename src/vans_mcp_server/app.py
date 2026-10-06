@@ -124,12 +124,21 @@ def _http_status_and_body(exc: BaseException) -> tuple[int | None, str]:
     return None, str(exc)
 
 
+def _is_google_http(exc: BaseException) -> bool:
+    if isinstance(exc, HttpError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError) and exc.request is not None:
+        host = exc.request.url.host or ""
+        return "googleapis.com" in host or host.endswith(".google.com")
+    return False
+
+
 def _is_invalid_grant(exc: BaseException) -> bool:
     from google.auth.exceptions import RefreshError
 
     status, body = _http_status_and_body(exc)
-    blob = f"{body} {exc}"
-    if "invalid_grant" not in blob:
+    detail = f"{body} {exc}"
+    if "invalid_grant" not in detail:
         return False
     if isinstance(exc, RefreshError):
         return True
@@ -139,14 +148,16 @@ def _is_invalid_grant(exc: BaseException) -> bool:
 
 
 def _forwards_as_signal(exc: BaseException) -> bool:
-    if isinstance(exc, (LookupError, PermissionError, ValueError)):
+    if isinstance(exc, (LookupError, PermissionError)):
         return False
+    if isinstance(exc, ValueError):
+        return str(exc) == "google refresh response missing access_token"
     if _is_invalid_grant(exc):
         return False
     status, body = _http_status_and_body(exc)
-    if status == 401 and "invalid_client" in body:
+    if status == 401 and "invalid_client" in body and _is_google_http(exc):
         return True
-    if status == 429:
+    if status == 429 and _is_google_http(exc):
         return True
     if status is not None and 400 <= status < 500:
         return False

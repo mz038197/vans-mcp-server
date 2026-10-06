@@ -75,8 +75,17 @@ class _SignalsReceiver:
     def posts(self) -> list[dict]:
         return self._server.posts
 
-    def close(self) -> None:
+    def fail_with(self, status: int) -> None:
+        self._server.status = status
+
+    def hold_responses(self) -> None:
+        self._server.hold_response.set()
+
+    def release_responses(self) -> None:
         self._server.release_response.set()
+
+    def close(self) -> None:
+        self.release_responses()
         self._server.shutdown()
         self._thread.join(timeout=2)
         self._server.server_close()
@@ -93,7 +102,9 @@ def _wait_until(predicate, timeout: float = 3.0) -> None:
 
 def _example() -> dict:
     return json.loads(
-        Path("tests/fixtures/signal_body.example.json").read_text(encoding="utf-8")
+        (Path(__file__).resolve().parent / "fixtures" / "signal_body.example.json").read_text(
+            encoding="utf-8"
+        )
     )
 
 
@@ -101,7 +112,8 @@ def _assert_signal_body(body: dict) -> None:
     example = _example()
     assert body.keys() == example.keys()
     assert len(body) == 5
-    assert body["level"] == "ERROR"
+    assert example["level"] == "ERROR"
+    assert body["level"] == example["level"]
     assert body["source"] == MCP_SOURCE
     logged_at = datetime.fromisoformat(body["log_time"])
     assert logged_at.tzinfo is not None and logged_at.utcoffset() is not None
@@ -208,6 +220,38 @@ def test_blank_or_missing_source_posts_nothing(monkeypatch):
         monkeypatch.delenv("DATABASE_URL", raising=False)
         import vans_mcp_server.app as app_module
 
+        importlib.reload(app_module)
+        logging.getLogger("vans_mcp_server").error("should stay local")
+        _assert_no_signal(receiver)
+        _close_forwarder(app_module)
+    finally:
+        receiver.close()
+
+
+def test_blank_or_missing_url_or_token_posts_nothing(monkeypatch):
+    receiver = _SignalsReceiver()
+    try:
+        monkeypatch.setenv("VANS_SIGNALS_SOURCE", MCP_SOURCE)
+        monkeypatch.setenv("VANS_SIGNALS_TOKEN", "mcp-token")
+        monkeypatch.delenv("VANS_SIGNALS_URL", raising=False)
+        monkeypatch.setenv("MCP_DEV_BYPASS_KEY", "vcr_sk_dev_local_only")
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        import vans_mcp_server.app as app_module
+
+        importlib.reload(app_module)
+        logging.getLogger("vans_mcp_server").error("should stay local")
+        _assert_no_signal(receiver)
+        _close_forwarder(app_module)
+
+        monkeypatch.setenv("VANS_SIGNALS_URL", "  ")
+        monkeypatch.setenv("VANS_SIGNALS_TOKEN", "mcp-token")
+        importlib.reload(app_module)
+        logging.getLogger("vans_mcp_server").error("should stay local")
+        _assert_no_signal(receiver)
+        _close_forwarder(app_module)
+
+        monkeypatch.setenv("VANS_SIGNALS_URL", receiver.url)
+        monkeypatch.setenv("VANS_SIGNALS_TOKEN", "")
         importlib.reload(app_module)
         logging.getLogger("vans_mcp_server").error("should stay local")
         _assert_no_signal(receiver)
@@ -606,3 +650,89 @@ def test_bot_in_guild_5xx_posts_a_signal_and_is_not_not_in_guild(signals, monkey
     assert all(
         "not_in_guild" not in (post["body"]["message"] or "") for post in receiver.posts
     )
+
+
+def test_discord_429_on_a_tool_posts_no_signal(signals, monkeypatch):
+    app_module, receiver = signals
+    _bypass_auth(app_module, monkeypatch)
+    monkeypatch.setenv("DISCORD_GUILD_ID", "guild1")
+    store = MagicMock()
+    store.get_discord_bot_connection.return_value = StoredDiscordBotConnection(
+        user_id=1,
+        bot_token="bot-token-secret",
+        application_id="app1",
+        bot_user_id="botuser1",
+    )
+    app_module.oauth_store = store
+    err = _httpx_status_error(
+        429,
+        '{"message":"rate limited"}',
+        url="https://discord.com/api/v10/users/@me/guilds",
+    )
+    with patch(
+        "vans_mcp_server.tools.discord.list_channels",
+        side_effect=err,
+    ):
+        with pytest.raises(httpx.HTTPStatusError):
+            app_module.discord_list_channels()
+    _assert_no_signal(receiver)
+
+
+def test_google_refresh_missing_access_token_posts_a_signal(signals, monkeypatch):
+    app_module, receiver = signals
+    _bypass_auth(app_module, monkeypatch)
+    _google_ready(app_module)
+    with patch(
+        "vans_mcp_server.tools.calendar.list_events",
+        side_effect=ValueError("google refresh response missing access_token"),
+    ):
+        with pytest.raises(ValueError, match="missing access_token"):
+            app_module.calendar_list_events(
+                "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"
+            )
+    _wait_until(lambda: len(receiver.posts) >= 1)
+    _assert_signal_body(receiver.posts[0]["body"])
+
+
+def _failure_logs(caplog):
+    return [record for record in caplog.records if record.name == "vans_signals_forwarder"]
+
+
+def test_a_failed_post_is_not_retried_and_is_not_another_signal(caplog, monkeypatch):
+    receiver = _SignalsReceiver()
+    receiver.fail_with(500)
+    app_module = None
+    try:
+        app_module = _reload_with_signals(monkeypatch, receiver)
+        with caplog.at_level(logging.ERROR, logger="vans_signals_forwarder"):
+            logging.getLogger("vans_mcp_server").error("delivery will fail")
+            _wait_until(lambda: len(receiver.posts) >= 1 and bool(_failure_logs(caplog)))
+        time.sleep(0.3)
+        assert len(receiver.posts) == 1
+        assert len(_failure_logs(caplog)) == 1
+        assert "mcp-token" not in _failure_logs(caplog)[0].getMessage()
+    finally:
+        if app_module is not None:
+            _close_forwarder(app_module)
+        receiver.close()
+
+
+def test_a_dead_destination_gives_up_after_about_two_seconds(caplog, monkeypatch):
+    receiver = _SignalsReceiver()
+    receiver.hold_responses()
+    app_module = None
+    try:
+        app_module = _reload_with_signals(monkeypatch, receiver)
+        with caplog.at_level(logging.ERROR, logger="vans_signals_forwarder"):
+            started = time.monotonic()
+            logging.getLogger("vans_mcp_server").error("destination is dead")
+            assert time.monotonic() - started < 0.3
+            _wait_until(lambda: bool(_failure_logs(caplog)), timeout=3.5)
+        elapsed = time.monotonic() - started
+        assert 1.5 <= elapsed <= 3.0
+        assert len(receiver.posts) == 1
+    finally:
+        receiver.release_responses()
+        if app_module is not None:
+            _close_forwarder(app_module)
+        receiver.close()
