@@ -129,7 +129,7 @@ def _parse_in_timezone(text: str, tz_name: str) -> datetime:
         raise ToolArgumentError(f"invalid datetime: {raw!r}; expected ISO-8601") from exc
     try:
         tz = ZoneInfo(tz_name)
-    except ZoneInfoNotFoundError as exc:
+    except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ToolArgumentError(f"unknown timezone: {tz_name!r}") from exc
     if dt.tzinfo is None:
         return dt.replace(tzinfo=tz)

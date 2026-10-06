@@ -473,6 +473,22 @@ def test_bad_calendar_datetime_or_timezone_posts_no_signal(
     _assert_no_signal(receiver)
 
 
+@pytest.mark.parametrize("timezone_name", ["", "/etc/localtime", "../x"])
+def test_timezone_value_error_posts_no_signal(signals, monkeypatch, timezone_name):
+    app_module, receiver = signals
+    _bypass_auth(app_module, monkeypatch)
+    _google_ready(app_module)
+    with pytest.raises(ToolArgumentError) as raised:
+        app_module.calendar_list_events(
+            "2026-01-01T00:00:00",
+            "2026-01-02T00:00:00",
+            timezone_name=timezone_name,
+        )
+    assert type(raised.value) is ToolArgumentError
+    assert str(raised.value) == f"unknown timezone: {timezone_name!r}"
+    _assert_no_signal(receiver)
+
+
 @pytest.mark.parametrize("status", [400, 403, 404, 409])
 def test_other_google_4xx_posts_no_signal(signals, monkeypatch, status):
     app_module, receiver = signals
