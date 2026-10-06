@@ -9,6 +9,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
+from vans_mcp_server.errors import ToolArgumentError
 from vans_mcp_server.oauth.crypto import TokenEncryptor
 from vans_mcp_server.oauth.google import GoogleOAuthService, GoogleTokenBundle
 
@@ -126,9 +127,9 @@ class OAuthConnectionStore:
         token = (bot_token or "").strip()
         app_id = (application_id or "").strip()
         if not token:
-            raise ValueError("bot_token is required")
+            raise ToolArgumentError("bot_token is required")
         if not app_id:
-            raise ValueError("application_id is required")
+            raise ToolArgumentError("application_id is required")
         now_iso = datetime.now(timezone.utc).isoformat()
         access_enc = self.encryptor.encrypt(token)
         with psycopg.connect(self.database_url) as conn:
@@ -195,7 +196,7 @@ class OAuthConnectionStore:
             else existing_refresh
         )
         if not refresh_enc:
-            raise ValueError("refresh_token required for first Google connect")
+            raise ToolArgumentError("refresh_token required for first Google connect")
 
         access_enc = self.encryptor.encrypt(bundle.access_token)
         scopes = bundle.scope

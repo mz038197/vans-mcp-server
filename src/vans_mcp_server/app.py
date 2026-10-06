@@ -15,6 +15,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 
 from vans_mcp_server.auth import VcrApiKeyVerifier, api_key_http_middleware
+from vans_mcp_server.errors import ToolArgumentError
 from vans_mcp_server.oauth.discord_connect import DiscordConnectState
 from vans_mcp_server.oauth.google import GoogleOAuthService
 from vans_mcp_server.oauth.store import OAuthConnectionStore
@@ -147,11 +148,23 @@ def _is_invalid_grant(exc: BaseException) -> bool:
     return False
 
 
+def _is_benign_user_error(exc: BaseException) -> bool:
+    """User mistakes the tool turns into a payload, with no Signal.
+
+    LookupError and PermissionError match by exact type so KeyError,
+    IndexError, and other subclasses still page. RuntimeError stays a
+    Discord configuration failure (no Signal), including subclasses.
+    """
+    if type(exc) is LookupError or type(exc) is PermissionError:
+        return True
+    return isinstance(exc, RuntimeError)
+
+
 def _forwards_as_signal(exc: BaseException) -> bool:
-    if isinstance(exc, (LookupError, PermissionError)):
+    if type(exc) is LookupError or type(exc) is PermissionError:
         return False
-    if isinstance(exc, ValueError):
-        return str(exc) == "google refresh response missing access_token"
+    if type(exc) is ToolArgumentError:
+        return False
     if _is_invalid_grant(exc):
         return False
     status, body = _http_status_and_body(exc)
@@ -352,7 +365,11 @@ def calendar_list_events(
         if '"error": "not_connected"' in out or '"error":"not_connected"' in out:
             err = "not_connected"
         return out
-    except LookupError:
+    except LookupError as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         err = "not_connected"
         user_id = _user_id() or 0
         out = calendar_tools.to_json(
@@ -421,7 +438,11 @@ def calendar_find_free_time(
                 out = calendar_tools.to_json(result)
         ok = True
         return out
-    except LookupError:
+    except LookupError as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         err = "not_connected"
         user_id = _user_id() or 0
         out = calendar_tools.to_json(
@@ -498,7 +519,11 @@ def calendar_create_event(
                 out = calendar_tools.to_json(result)
         ok = True
         return out
-    except LookupError:
+    except LookupError as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         err = "not_connected"
         user_id = _user_id() or 0
         out = calendar_tools.to_json(
@@ -586,7 +611,11 @@ def calendar_update_event(
                 out = calendar_tools.to_json(result)
         ok = True
         return out
-    except LookupError:
+    except LookupError as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         err = "not_connected"
         user_id = _user_id() or 0
         out = calendar_tools.to_json(
@@ -637,7 +666,7 @@ def calendar_delete_event(event_id: str, confirm: bool = False) -> str:
             user_id = _require_user_id()
             eid = (event_id or "").strip()
             if not eid:
-                raise ValueError("event_id is required")
+                raise ToolArgumentError("event_id is required")
             if not confirm:
                 out = calendar_tools.to_json(
                     calendar_tools.confirmation_required_payload(
@@ -661,7 +690,11 @@ def calendar_delete_event(event_id: str, confirm: bool = False) -> str:
                     out = calendar_tools.to_json(result)
         ok = True
         return out
-    except LookupError:
+    except LookupError as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         err = "not_connected"
         user_id = _user_id() or 0
         out = calendar_tools.to_json(
@@ -753,6 +786,10 @@ def gmail_search_messages(query: str, max_results: int = 10) -> str:
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _gmail_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -812,6 +849,10 @@ def gmail_summarize_thread(thread_id: str, max_messages: int = 10) -> str:
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _gmail_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -873,6 +914,10 @@ def gmail_create_draft(to: str, subject: str, body: str = "") -> str:
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _gmail_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -950,6 +995,10 @@ def gmail_send_email(
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _gmail_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -1025,6 +1074,10 @@ def gmail_trash_message(message_ids: list[str], confirm: bool = False) -> str:
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _gmail_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -1069,6 +1122,10 @@ def _run_gmail_modify(tool_name: str, fn, **kwargs) -> str:
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _gmail_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -1203,6 +1260,10 @@ def gmail_list_labels() -> str:
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _gmail_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -1312,6 +1373,10 @@ def tasks_list_tasklists(max_results: int = 20) -> str:
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _tasks_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -1377,6 +1442,10 @@ def tasks_list_tasks(
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _tasks_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -1445,6 +1514,10 @@ def tasks_create_task(
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _tasks_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -1521,6 +1594,10 @@ def tasks_update_task(
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _tasks_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -1569,7 +1646,7 @@ def tasks_delete_task(
             user_id = _require_user_id()
             tid = (task_id or "").strip()
             if not tid:
-                raise ValueError("task_id is required")
+                raise ToolArgumentError("task_id is required")
             if not confirm:
                 out = tasks_tools.to_json(
                     tasks_tools.confirmation_required_payload(
@@ -1602,6 +1679,10 @@ def tasks_delete_task(
         ok = True
         return out
     except (LookupError, PermissionError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _tasks_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -1702,6 +1783,10 @@ def discord_list_channels() -> str:
         ok = True
         return out
     except (LookupError, RuntimeError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _discord_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -1754,6 +1839,10 @@ def discord_read_messages(channel_id: str, limit: int = 20) -> str:
         ok = True
         return out
     except (LookupError, RuntimeError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _discord_error_payload(user_id, exc)
         err = type(exc).__name__
@@ -1799,7 +1888,7 @@ def discord_send_message(
             user_id = _require_user_id()
             cid = (channel_id or "").strip()
             if not cid:
-                raise ValueError("channel_id is required")
+                raise ToolArgumentError("channel_id is required")
             if not confirm:
                 out = discord_tools.to_json(
                     discord_tools.confirmation_required_payload(
@@ -1821,6 +1910,10 @@ def discord_send_message(
         ok = True
         return out
     except (LookupError, RuntimeError) as exc:
+        if not _is_benign_user_error(exc):
+            err = type(exc).__name__
+            _log_unexpected_failure(exc)
+            raise
         user_id = _user_id() or 0
         out = _discord_error_payload(user_id, exc)
         err = type(exc).__name__

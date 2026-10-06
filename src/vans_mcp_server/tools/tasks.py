@@ -6,6 +6,7 @@ from typing import Any
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from vans_mcp_server.errors import ToolArgumentError
 from vans_mcp_server.oauth.google import (
     GOOGLE_PORTAL_SCOPES,
     TASKS_SCOPE,
@@ -231,7 +232,7 @@ def create_task(
         raise PermissionError("missing_scopes")
     cleaned_title = (title or "").strip()
     if not cleaned_title:
-        raise ValueError("title is required")
+        raise ToolArgumentError("title is required")
 
     list_id = _normalize_tasklist_id(tasklist_id)
     body: dict[str, Any] = {"title": cleaned_title}
@@ -271,14 +272,14 @@ def update_task(
 
     tid = (task_id or "").strip()
     if not tid:
-        raise ValueError("task_id is required")
+        raise ToolArgumentError("task_id is required")
     list_id = _normalize_tasklist_id(tasklist_id)
 
     body: dict[str, Any] = {"id": tid}
     if title is not None:
         cleaned = title.strip()
         if not cleaned:
-            raise ValueError("title cannot be empty")
+            raise ToolArgumentError("title cannot be empty")
         body["title"] = cleaned
     if notes is not None:
         body["notes"] = notes
@@ -287,11 +288,11 @@ def update_task(
     if status is not None:
         cleaned_status = status.strip()
         if cleaned_status not in _ALLOWED_STATUSES:
-            raise ValueError("status must be needsAction or completed")
+            raise ToolArgumentError("status must be needsAction or completed")
         body["status"] = cleaned_status
 
     if len(body) == 1:
-        raise ValueError("provide at least one of title, notes, due, status")
+        raise ToolArgumentError("provide at least one of title, notes, due, status")
 
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
     service = _tasks_service(creds)
@@ -320,7 +321,7 @@ def delete_task(
     tid = (task_id or "").strip()
     list_id = _normalize_tasklist_id(tasklist_id)
     if not tid:
-        raise ValueError("task_id is required")
+        raise ToolArgumentError("task_id is required")
     if not confirm:
         return confirmation_required_payload(task_id=tid, tasklist_id=list_id)
 

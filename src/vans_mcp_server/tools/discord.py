@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from vans_mcp_server.errors import ToolArgumentError
 from vans_mcp_server.oauth.discord_connect import DiscordConnectState
 from vans_mcp_server.oauth.store import OAuthConnectionStore
 
@@ -186,7 +187,7 @@ def verify_bot_token(bot_token: str) -> dict[str, Any]:
     """Call GET /users/@me with Bot token. Raises httpx.HTTPStatusError on failure."""
     token = (bot_token or "").strip()
     if not token:
-        raise ValueError("bot_token is required")
+        raise ToolArgumentError("bot_token is required")
     with httpx.Client(timeout=20.0) as client:
         resp = client.get(
             f"{DISCORD_API}/users/@me",
@@ -329,7 +330,7 @@ def read_messages(
 ) -> dict[str, Any]:
     cid = (channel_id or "").strip()
     if not cid:
-        raise ValueError("channel_id is required")
+        raise ToolArgumentError("channel_id is required")
     lim = max(1, min(int(limit), 100))
     bot_token, guild_id = _require_ready(user_id=user_id, store=store)
     assert store is not None
@@ -401,9 +402,9 @@ def send_message(
     cid = (channel_id or "").strip()
     body = content if content is not None else ""
     if not cid:
-        raise ValueError("channel_id is required")
+        raise ToolArgumentError("channel_id is required")
     if not str(body).strip():
-        raise ValueError("content is required")
+        raise ToolArgumentError("content is required")
     if not confirm:
         return confirmation_required_payload(channel_id=cid, content=str(body))
 

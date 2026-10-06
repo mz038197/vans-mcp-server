@@ -18,6 +18,7 @@ from google.auth.exceptions import RefreshError, TransportError
 from googleapiclient.errors import HttpError
 from starlette.testclient import TestClient
 
+from vans_mcp_server.errors import ToolArgumentError
 from vans_mcp_server.oauth.crypto import TokenEncryptor
 from vans_mcp_server.oauth.google import (
     GMAIL_COMPOSE_SCOPE,
@@ -357,6 +358,56 @@ def test_unexpected_tool_exception_posts_a_signal(signals, monkeypatch):
     _assert_signal_body(receiver.posts[0]["body"])
 
 
+def _list_events_raising(app_module, exc: Exception) -> None:
+    with patch("vans_mcp_server.tools.calendar.list_events", side_effect=exc):
+        with pytest.raises(type(exc)):
+            app_module.calendar_list_events(
+                "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"
+            )
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        KeyError("items"),
+        IndexError(0),
+        json.JSONDecodeError("Expecting value", "", 0),
+        ValueError("failed to decrypt oauth token"),
+        ValueError("OAUTH_TOKEN_ENCRYPTION_KEY is required"),
+    ],
+)
+def test_subclass_and_crypto_failures_post_a_signal(signals, monkeypatch, exc):
+    app_module, receiver = signals
+    _bypass_auth(app_module, monkeypatch)
+    _google_ready(app_module)
+    _list_events_raising(app_module, exc)
+    _wait_until(lambda: len(receiver.posts) >= 1)
+    assert str(exc) in receiver.posts[0]["body"]["message"]
+    _assert_signal_body(receiver.posts[0]["body"])
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [LookupError("not_connected"), PermissionError("missing_scopes")],
+)
+def test_exact_lookup_and_permission_errors_post_no_signal(signals, monkeypatch, exc):
+    app_module, receiver = signals
+    _bypass_auth(app_module, monkeypatch)
+    _google_ready(app_module)
+    with patch("vans_mcp_server.tools.calendar.list_events", side_effect=exc):
+        if type(exc) is LookupError:
+            out = app_module.calendar_list_events(
+                "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"
+            )
+            assert "not_connected" in out
+        else:
+            with pytest.raises(PermissionError, match="missing_scopes"):
+                app_module.calendar_list_events(
+                    "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"
+                )
+    _assert_no_signal(receiver)
+
+
 @pytest.mark.parametrize("status", [400, 403, 404, 409])
 def test_other_google_4xx_posts_no_signal(signals, monkeypatch, status):
     app_module, receiver = signals
@@ -404,8 +455,9 @@ def test_not_connected_and_missing_args_post_no_signal(signals, monkeypatch):
     )
     payload = json.loads(out)
     assert payload["error"] == "not_connected"
-    with pytest.raises(ValueError, match="event_id"):
+    with pytest.raises(ToolArgumentError, match="event_id") as raised:
         app_module.calendar_delete_event("  ", confirm=True)
+    assert type(raised.value) is ToolArgumentError
     _assert_no_signal(receiver)
 
 
@@ -715,6 +767,54 @@ def test_a_failed_post_is_not_retried_and_is_not_another_signal(caplog, monkeypa
         if app_module is not None:
             _close_forwarder(app_module)
         receiver.close()
+
+
+def test_api_key_database_failure_posts_a_signal(signals, monkeypatch):
+    import asyncio
+
+    from vans_mcp_server.auth import VcrApiKeyVerifier
+
+    _app_module, receiver = signals
+    verifier = VcrApiKeyVerifier(database_url="postgresql://signals:signals@127.0.0.1:1/unused")
+    assert verifier.store is not None
+    monkeypatch.setattr(
+        verifier.store, "verify", MagicMock(side_effect=RuntimeError("db down"))
+    )
+    assert asyncio.run(verifier.verify_token("vcr_sk_student")) is None
+    _wait_until(lambda: len(receiver.posts) >= 1)
+    assert "API key verification failed" in receiver.posts[0]["body"]["message"]
+    _assert_signal_body(receiver.posts[0]["body"])
+
+
+def test_usage_write_failure_posts_a_signal(signals, monkeypatch):
+    import psycopg
+
+    from vans_mcp_server.usage import UsageLogger
+
+    _app_module, receiver = signals
+    monkeypatch.setattr(UsageLogger, "_ensure_table", lambda self: None)
+
+    def _down(*_args, **_kwargs):
+        raise psycopg.OperationalError("db down")
+
+    monkeypatch.setattr("vans_mcp_server.usage.psycopg.connect", _down)
+    UsageLogger(database_url="postgresql://unused").record(
+        tool_name="calendar_list_events",
+        success=True,
+    )
+    _wait_until(lambda: len(receiver.posts) >= 1)
+    assert "failed to write mcp_usage" in receiver.posts[0]["body"]["message"]
+    _assert_signal_body(receiver.posts[0]["body"])
+
+
+def test_forwarder_is_attached_before_any_request(signals):
+    from vans_mcp_server.signal_forwarder import SignalForwarder
+
+    app_module, receiver = signals
+    forwarder = app_module._signal_forwarder
+    assert isinstance(forwarder, SignalForwarder)
+    assert forwarder in logging.getLogger("vans_mcp_server").handlers
+    assert receiver.posts == []
 
 
 def test_a_dead_destination_gives_up_after_about_two_seconds(caplog, monkeypatch):
