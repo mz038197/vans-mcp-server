@@ -5,8 +5,8 @@ The Agent Dungeon planning and communication portal. Student agents act on a stu
 ## Language
 
 **Classroom API Key**:
-The per-student credential this service accepts for one Class Session. The router issues it, and this service checks that issuance itself. It expires at the expiry the router fixed when it was issued.
-_Avoid_: Personal API Key, a secret resolved by reading the router's key table, the sitting's current expiry
+The per-student credential this service accepts for one Class Session. The router issues it, and this service checks that issuance itself. It expires at the expiry the router fixed when it was issued. This service also refuses it when the student is disabled, when its Class is not active or past the Class end, when a newer key for that student in that sitting ended it, or while its sitting is closed. Opening that sitting accepts it again when its own expiry has not passed.
+_Avoid_: Personal API Key, a secret resolved by reading the router's key table, the sitting's current expiry, a new redeem to restore a key after the sitting is opened
 
 **Personal API Key**:
 A long-lived teacher or admin key checked only by the router. This service does not accept it.
