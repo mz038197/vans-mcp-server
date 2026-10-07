@@ -4,6 +4,10 @@ The Agent Dungeon planning and communication portal. Student agents act on a stu
 
 ## Language
 
+**Revocation List**:
+This service's copy of the before-expiry refusals the router publishes. The service refreshes that copy from the router. A student call uses the copy.
+_Avoid_: asking the router on each student call, a push from the router, reading the router's tables
+
 **Classroom API Key**:
 The per-student credential this service accepts for one Class Session. The router issues it, and this service checks that issuance itself. It expires at the expiry the router fixed when it was issued. This service also refuses it when the student is disabled, when its Class is not active or past the Class end, when a newer key for that student in that sitting ended it, or while its sitting is closed. Opening that sitting accepts it again when its own expiry has not passed.
 _Avoid_: Personal API Key, a secret resolved by reading the router's key table, the sitting's current expiry, a new redeem to restore a key after the sitting is opened
