@@ -9,6 +9,7 @@ from typing import Any
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from vans_mcp_server.errors import ToolArgumentError
 from vans_mcp_server.oauth.google import (
     GMAIL_COMPOSE_SCOPE,
     GMAIL_MODIFY_SCOPE,
@@ -395,7 +396,7 @@ def create_draft(
     if not scopes_include(conn.scopes, GMAIL_BASE_SCOPES):
         raise PermissionError("missing_scopes")
     if not (to or "").strip():
-        raise ValueError("to is required")
+        raise ToolArgumentError("to is required")
 
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
     service = _gmail_service(creds)
@@ -436,7 +437,7 @@ def send_email(
     if not scopes_include(conn.scopes, GMAIL_BASE_SCOPES):
         raise PermissionError("missing_scopes")
     if not (to or "").strip():
-        raise ValueError("to is required")
+        raise ToolArgumentError("to is required")
 
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
     service = _gmail_service(creds)

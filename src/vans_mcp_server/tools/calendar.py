@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from vans_mcp_server.errors import ToolArgumentError
 from vans_mcp_server.oauth.google import GOOGLE_PORTAL_SCOPES, GoogleOAuthService
 from vans_mcp_server.oauth.store import OAuthConnectionStore
 
@@ -119,11 +120,17 @@ def _parse_in_timezone(text: str, tz_name: str) -> datetime:
     """
     raw = (text or "").strip()
     if not raw:
-        raise ValueError("empty datetime")
+        raise ToolArgumentError("empty datetime")
     if raw.endswith("Z"):
         raw = raw[:-1] + "+00:00"
-    dt = datetime.fromisoformat(raw)
-    tz = ZoneInfo(tz_name)
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ToolArgumentError(f"invalid datetime: {raw!r}; expected ISO-8601") from exc
+    try:
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ToolArgumentError(f"unknown timezone: {tz_name!r}") from exc
     if dt.tzinfo is None:
         return dt.replace(tzinfo=tz)
     return dt.astimezone(tz)
@@ -153,7 +160,7 @@ def _attendee_payloads(emails: list[str] | None) -> list[dict[str, str]] | None:
         if not email:
             continue
         if "@" not in email or email.startswith("@") or email.endswith("@"):
-            raise ValueError(f"invalid attendee email: {raw!r}")
+            raise ToolArgumentError(f"invalid attendee email: {raw!r}")
         key = email.lower()
         if key in seen:
             continue
@@ -175,7 +182,7 @@ def _attendee_list_for_update(
     """
     if clear:
         if _attendee_payloads(emails):
-            raise ValueError(
+            raise ToolArgumentError(
                 "clear_attendees cannot be combined with a non-empty attendees list"
             )
         return []
@@ -336,7 +343,7 @@ def create_event(
     if conn is None:
         raise LookupError("not_connected")
     if not (summary or "").strip():
-        raise ValueError("summary is required")
+        raise ToolArgumentError("summary is required")
     payloads = _attendee_payloads(attendees)
     creds = _credentials(conn.access_token, conn.refresh_token, oauth)
     service = _calendar_service(creds)
@@ -396,16 +403,16 @@ def update_event(
     """Patch fields on an existing primary-calendar event."""
     eid = (event_id or "").strip()
     if not eid:
-        raise ValueError("event_id is required")
+        raise ToolArgumentError("event_id is required")
     has_start = start is not None and str(start).strip() != ""
     has_end = end is not None and str(end).strip() != ""
     if has_start != has_end:
-        raise ValueError("start and end must both be provided when changing time")
+        raise ToolArgumentError("start and end must both be provided when changing time")
     payloads = _attendee_list_for_update(attendees, clear=clear_attendees)
     body: dict[str, Any] = {}
     if summary is not None:
         if not str(summary).strip():
-            raise ValueError("summary cannot be empty")
+            raise ToolArgumentError("summary cannot be empty")
         body["summary"] = str(summary).strip()
     if description is not None:
         body["description"] = description
@@ -417,7 +424,7 @@ def update_event(
     if payloads is not None:
         body["attendees"] = payloads
     if not body:
-        raise ValueError(
+        raise ToolArgumentError(
             "provide at least one of summary, start/end, description, "
             "attendees, or clear_attendees"
         )
@@ -459,7 +466,7 @@ def delete_event(
     """Delete an event from the primary calendar. Requires confirm=true."""
     eid = (event_id or "").strip()
     if not eid:
-        raise ValueError("event_id is required")
+        raise ToolArgumentError("event_id is required")
     if not confirm:
         return confirmation_required_payload(event_id=eid, action="delete")
 
