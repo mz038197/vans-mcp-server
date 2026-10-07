@@ -5,8 +5,8 @@ The Agent Dungeon planning and communication portal. Student agents act on a stu
 ## Language
 
 **Revocation List**:
-This service's copy of the before-expiry refusals the router publishes. The service refreshes that copy from the router. A student call uses the copy.
-_Avoid_: asking the router on each student call, a push from the router, reading the router's tables
+This service's copy of the before-expiry refusals the router publishes. The service refreshes that copy from the router. A student call uses the copy. With no copy, the service refuses student calls. A copy older than 600 seconds is not used, and the service then refuses every student call. That bound is the same during a sitting.
+_Avoid_: asking the router on each student call, a push from the router, reading the router's tables, a longer bound during a sitting
 
 **Classroom API Key**:
 The per-student credential this service accepts for one Class Session. The router issues it, and this service checks that issuance itself. It expires at the expiry the router fixed when it was issued. This service also refuses it when the student is disabled, when its Class is not active or past the Class end, when a newer key for that student in that sitting ended it, or while its sitting is closed. Opening that sitting accepts it again when its own expiry has not passed.
