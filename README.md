@@ -28,7 +28,7 @@ uv run vans-mcp-server
 - Google connect: `http://127.0.0.1:8080/connect/google/start?state=...`（由 `google_get_connect_url` 產生）
 - Discord connect: `http://127.0.0.1:8080/connect/discord/start?state=...`（由 `discord_get_connect_url` 產生；需 `DISCORD_GUILD_ID`）
 
-Production auth uses the same Neon `DATABASE_URL` as `vans-coding-router` (verify `api_keys`). For local without Neon, set `MCP_DEV_BYPASS_KEY` only (Google/Discord connect still needs `DATABASE_URL` + secrets).
+Production checks a signed Classroom API Key itself and sends a legacy key to the router. `DATABASE_URL` is the Neon database `vans_mcp_server`, not the router's `neondb`. For local without Neon, set `MCP_DEV_BYPASS_KEY` only (Google/Discord connect still needs `DATABASE_URL` + secrets).
 
 ## Tests
 
