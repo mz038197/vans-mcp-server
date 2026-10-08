@@ -13,8 +13,12 @@ The one secret this service shares with pokemon-world-mcp to fetch the Revocatio
 _Avoid_: a student bearer, a public read, a database connection string
 
 **Classroom API Key**:
-The per-student credential this service accepts for one Class Session. The router issues it, and this service checks that issuance itself. It expires at the expiry the router fixed when it was issued. This service also refuses it when the student is disabled, when its Class is not active or past the Class end, when a newer key for that student in that sitting ended it, or while its sitting is closed. Opening that sitting accepts it again when its own expiry has not passed. Enabling the student again, or the Class being active with its end still ahead, accepts an unexpired key again without a new redeem. A key ended because a newer one was issued stays ended.
-_Avoid_: Personal API Key, a secret resolved by reading the router's key table, the sitting's current expiry, a new redeem to restore a key after the sitting is opened
+The per-student credential this service accepts for one Class Session. The router issues it, and this service checks that issuance itself. It expires at the expiry the router fixed when it was issued. This service also refuses it when the student is disabled, when its Class is not active or past the Class end, when a newer key for that student in that sitting ended it, or while its sitting is closed. Opening that sitting accepts it again when its own expiry has not passed. Enabling the student again, or the Class being active with its end still ahead, accepts an unexpired key again without a new redeem. A key ended because a newer one was issued stays ended. The student sees a Key Refusal.
+_Avoid_: Personal API Key, a secret resolved by reading the router's key table, the sitting's current expiry, a new redeem to restore a key after the sitting is opened, one shared 無效的 API 金鑰 for every cause
+
+**Key Refusal**:
+The notice this service shows when a Classroom API Key is refused before its expiry. A key ended by a newer one is 已在其他電腦兌換. A closed Class Session is 課堂已關閉. A disabled student is 學生已被停用. A Class that is not active or past its end is 課程已結束或停用. The key's own expiry remains「API 金鑰已過期，請至 Portal 重新取得邀請碼」.
+_Avoid_: 無效的 API 金鑰 for every cause, a nickname or email on the Revocation List
 
 **Personal API Key**:
 A long-lived teacher or admin key checked only by the router. This service does not accept it.
