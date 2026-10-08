@@ -17,7 +17,7 @@ notepad "$HOME\.vans-mcp-server\fly.secrets.env"
 
 | Secret | 說明 |
 |--------|------|
-| `DATABASE_URL` | 與 `vans-coding-router` **同一** Neon connection string |
+| `DATABASE_URL` | 本服務自己的資料庫，**不是** `vans-coding-router` 的 Neon connection string。`mcp_usage` 與 `mcp_oauth_connections` 從 router 那顆庫搬過來。新資料庫放在哪裡、搬移要不要停寫，尚未寫成操作步驟 |
 | `GOOGLE_CLIENT_ID` | Google OAuth Client（可與 router 共用） |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth Client secret |
 | `SESSION_SECRET` | Connect link state 的 HMAC secret（Google + Discord 共用） |
@@ -76,7 +76,7 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-fly.ps1 -SecretsOnly
 2. 學生：Discord Developer Portal 建立 Bot → Agent 呼叫 `discord_get_connect_url` → 瀏覽器貼上 Application ID + Bot Token（**勿貼進聊天**）→ 用成功頁的 invite 連結把 Bot 加入課堂伺服器
 3. 可用 `discord_list_channels` / `discord_read_messages` / `discord_send_message`（send 需 `confirm=true`）
 4. 若要讀訊息內文：在 Developer Portal 開啟 Bot 的 **Message Content Intent**
-5. 結課：請學生在 Developer Portal **Reset Token**；可另清 Neon 中 `provider=discord_bot` 列
+5. 結課：請學生在 Developer Portal **Reset Token**；可另清本服務資料庫中 `provider=discord_bot` 列
 
 ## 部署
 
@@ -112,6 +112,7 @@ curl https://mcp.vanscoding.com/health
 ## 與 router 的關係
 
 - App 分開：`vans-coding-router`（`ai.vanscoding.com`）與 `vans-mcp-server`（`mcp.vanscoding.com`）
-- 共用 Neon：學生同一把 `vcr_sk_` 可打 LLM 與 MCP
-- MCP 讀 `api_keys` / `users`，寫 `mcp_usage` 與 `mcp_oauth_connections`
+- 不開 router 的資料庫，不讀 `api_keys` / `users`，也不再把 `mcp_usage` 或 `mcp_oauth_connections` 留在那顆庫
+- 學生同一把 `vcr_sk_`：簽章票在本服務自己驗，並對停用名單；舊格式金鑰送到 router 的 `POST /internal/legacy-key`
+- 既有 Google／Discord 授權要在搬移後仍可用。列裡的密文只有現在這把 `OAUTH_TOKEN_ENCRYPTION_KEY` 解得開，搬移時留著這把 key
 - Google **登入**（router／dungeon）與 Google **Calendar connect**（本服務）刻意分開
