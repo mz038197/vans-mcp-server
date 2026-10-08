@@ -17,7 +17,7 @@ The per-student credential this service accepts for one Class Session. The route
 _Avoid_: Personal API Key, a secret resolved by reading the router's key table, the sitting's current expiry, a new redeem to restore a key after the sitting is opened, one shared 無效的 API 金鑰 for every cause
 
 **Key Refusal**:
-The notice this service shows when a Classroom API Key is refused before its expiry. A key ended by a newer one is 已在其他電腦兌換. A closed Class Session is 課堂已關閉. A disabled student is 學生已被停用. A Class that is not active or past its end is 課程已結束或停用. The key's own expiry remains「API 金鑰已過期，請至 Portal 重新取得邀請碼」.
+The notice this service shows when a Classroom API Key is refused before its expiry. A key ended by a newer one is 已在其他電腦兌換. A closed Class Session is 課堂已關閉. A disabled student is 學生已被停用. A Class that is not active or past its end is 課程已結束或停用. The key's own expiry remains「API 金鑰已過期，請至 Portal 重新取得邀請碼」. When more than one cause applies, the notice is the first that still blocks a new redeem: the disabled student, then the Class, then the closed sitting, then the key ended by a newer one.
 _Avoid_: 無效的 API 金鑰 for every cause, a nickname or email on the Revocation List
 
 **Personal API Key**:
