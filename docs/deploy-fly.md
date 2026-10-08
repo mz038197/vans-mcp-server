@@ -17,7 +17,7 @@ notepad "$HOME\.vans-mcp-server\fly.secrets.env"
 
 | Secret | 說明 |
 |--------|------|
-| `DATABASE_URL` | Neon 專案 `VCRouter-db` 的 database `vans_mcp_server`。role 只能連這個 database，不能連 `neondb`。驗收是用這組 role 連 `neondb` 並被拒。另建 role 名稱不夠：要對 PUBLIC `REVOKE CONNECT`，role 不能是 `neon_superuser`，再只 `GRANT CONNECT` 給這個 role。role 名稱尚未定 |
+| `DATABASE_URL` | Neon 專案 `VCRouter-db` 的 database `vans_mcp_server`，role `vans_mcp_server_app`。不能連 `neondb`。驗收是用這組 role 連 `neondb` 並被拒。要對 PUBLIC `REVOKE CONNECT`，role 不能是 `neon_superuser` |
 | `GOOGLE_CLIENT_ID` | Google OAuth Client（可與 router 共用） |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth Client secret |
 | `SESSION_SECRET` | Connect link state 的 HMAC secret（Google + Discord 共用） |

@@ -25,7 +25,7 @@ A long-lived teacher or admin key checked only by the router. This service does 
 _Avoid_: Classroom API Key
 
 **Student Connection**:
-This service's record of one student's Google or Discord authorization, stored under that student's integer id. The rows move to the database `vans_mcp_server` in the Neon project VCRouter-db, beside the router's `neondb`, and the id on each row stays. The role this service uses can connect to that database and cannot connect to `neondb`. The move copies the rows, pauses new writes, copies what arrived during the pause, then this service writes only there. A connection that already works keeps working. This service cannot read `neondb`.
+This service's record of one student's Google or Discord authorization, stored under that student's integer id. The rows move to the database `vans_mcp_server` in the Neon project VCRouter-db, beside the router's `neondb`, and the id on each row stays. The role is `vans_mcp_server_app`. It can connect to that database and cannot connect to `neondb`. The move copies the rows, pauses new writes, copies what arrived during the pause, then this service writes only there. A connection that already works keeps working. This service cannot read `neondb`.
 _Avoid_: a Portal Google login, a connection left on `neondb`, a rewritten student id, a student re-authorizing because the rows moved, a new Neon project
 
 **Tool Call Record**:
