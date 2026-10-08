@@ -1,6 +1,6 @@
 # This service verifies a Classroom API Key through vans-auth
 
-Signature checks, public-key fetch, Revocation List refresh, and the 600-second copy bound come from the `vans-auth` package. A legacy HMAC key is sent to the router for the hash check. This service does not read the router's tables for that key.
+Signature checks, public-key fetch, Revocation List refresh, and the 600-second copy bound come from the `vans-auth` package. A legacy HMAC key is sent to the router with the Revocation List Credential. The key itself is the request body. This service does not read the router's tables for that key.
 
 ## Considered Options
 

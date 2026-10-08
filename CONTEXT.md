@@ -9,7 +9,7 @@ This service's copy of the before-expiry refusals the router publishes. The serv
 _Avoid_: asking the router on each student call, a push from the router, reading the router's tables, a longer bound during a sitting
 
 **Revocation List Credential**:
-The one secret this service shares with pokemon-world-mcp to fetch the Revocation List. It is not a Classroom API Key or a Personal API Key.
+The one secret this service shares with pokemon-world-mcp to fetch the Revocation List and to ask the router to check a legacy Classroom API Key. The legacy key is the request body, not the secret. It is not a Classroom API Key or a Personal API Key.
 _Avoid_: a student bearer, a public read, a database connection string
 
 **Classroom API Key**:
