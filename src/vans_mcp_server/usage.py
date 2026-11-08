@@ -39,6 +39,7 @@ class UsageLogger:
                 CREATE TABLE IF NOT EXISTS mcp_usage (
                     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                     user_id INTEGER,
+                    -- Kept for rows written before Key Check; new rows leave it NULL (ADR 0063).
                     api_key_id INTEGER,
                     tool_name TEXT NOT NULL,
                     success BOOLEAN NOT NULL,
@@ -56,14 +57,12 @@ class UsageLogger:
         tool_name: str,
         success: bool,
         user_id: int | None = None,
-        api_key_id: int | None = None,
         latency_ms: int | None = None,
         error_type: str | None = None,
     ) -> None:
         created_at = datetime.now(timezone.utc).isoformat()
         payload: dict[str, Any] = {
             "user_id": user_id,
-            "api_key_id": api_key_id,
             "tool_name": tool_name,
             "success": success,
             "latency_ms": latency_ms,
@@ -78,12 +77,11 @@ class UsageLogger:
                 conn.execute(
                     """
                     INSERT INTO mcp_usage
-                        (user_id, api_key_id, tool_name, success, latency_ms, error_type, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        (user_id, tool_name, success, latency_ms, error_type, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
                         user_id,
-                        api_key_id,
                         tool_name,
                         success,
                         latency_ms,

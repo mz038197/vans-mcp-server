@@ -1,0 +1,10 @@
+{
+  "accepted": true,
+  "kind": "personal",
+  "user_id": 42,
+  "is_admin": false,
+  "classes": [
+    {"id": 56, "name": "週一 程式設計"},
+    {"id": 57, "name": "週三 進階班"}
+  ]
+}

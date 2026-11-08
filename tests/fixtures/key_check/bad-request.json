@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "invalid_key_check_body",
+    "message": "The body must be a JSON object with a string \"api_key\"."
+  }
+}

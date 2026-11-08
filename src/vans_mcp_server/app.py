@@ -96,7 +96,6 @@ def _record(tool_name: str, success: bool, latency_ms: int, error_type: str | No
         tool_name=tool_name,
         success=success,
         user_id=claims.get("user_id"),
-        api_key_id=claims.get("api_key_id"),
         latency_ms=latency_ms,
         error_type=error_type,
     )
@@ -1928,7 +1927,7 @@ def discord_send_message(
 
 
 async def health(_request: Request) -> JSONResponse:
-    mode = "neon" if os.environ.get("DATABASE_URL") else "bypass_or_unconfigured"
+    mode = "key_check_with_dev_bypass" if auth.bypass_key else "key_check"
     return JSONResponse(
         {
             "ok": True,

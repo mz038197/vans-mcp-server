@@ -17,7 +17,8 @@ notepad "$HOME\.vans-mcp-server\fly.secrets.env"
 
 | Secret | 說明 |
 |--------|------|
-| `DATABASE_URL` | 與 `vans-coding-router` **同一** Neon connection string |
+| `DATABASE_URL` | `mcp_usage` 與 `mcp_oauth_connections` 所在的 Neon（目前仍是 router 的 `neondb`，#100 會搬走） |
+| `VCR_SERVICE_CREDENTIAL` | 呼叫 router Key Check 的 Service Credential（`openssl rand -hex 32`） |
 | `GOOGLE_CLIENT_ID` | Google OAuth Client（可與 router 共用） |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth Client secret |
 | `SESSION_SECRET` | Connect link state 的 HMAC secret（Google + Discord 共用） |
@@ -25,7 +26,21 @@ notepad "$HOME\.vans-mcp-server\fly.secrets.env"
 
 `PUBLIC_URL` 與 `DISCORD_GUILD_ID` 放在 `fly.toml` 的 `[env]`，不要設成 Fly secret。
 
-**不要**在 production 設定 `MCP_DEV_BYPASS_KEY`。
+`VCR_URL` 預設 `https://ai.vanscoding.com`，正式環境不用設定。
+
+**不要**在 production 設定 `MCP_DEV_BYPASS_KEY`：有 `FLY_APP_NAME`（每台 Fly 機器都有）又設定它時，服務拒絕啟動。
+
+### Service Credential（Key Check）
+
+金鑰由 router 的 `POST /internal/key-check` 驗證（ADR 0079、0082）。router 那邊的產生與輪換步驟見 router 的 `guide/DEPLOYMENT.md`「Service Credential（Key Check）」。
+
+1. `openssl rand -hex 32` 產生 credential。
+2. 算出 SHA-256，加進 router 的 Fly secret `VCR_SERVICE_TOKENS`：`{"<sha256>": "vans-mcp-server", ...}`，部署 router。
+3. 設定本服務的 Fly secret `VCR_SERVICE_CREDENTIAL`（原文）。
+
+輪換：先在 `VCR_SERVICE_TOKENS` 加新雜湊並部署 router，再換本服務的 secret，最後刪掉舊雜湊。credential 設錯時 router 回 401，MCP 對所有人回「驗證服務暫時無法使用，請稍後再試」並送 ERROR Signal。
+
+上線前通知老師：Key Check 會擋「課堂尚未開始」的學生，MCP 在開課時間前不能用。
 
 產生 Fernet key：
 
@@ -112,6 +127,7 @@ curl https://mcp.vanscoding.com/health
 ## 與 router 的關係
 
 - App 分開：`vans-coding-router`（`ai.vanscoding.com`）與 `vans-mcp-server`（`mcp.vanscoding.com`）
-- 共用 Neon：學生同一把 `vcr_sk_` 可打 LLM 與 MCP
-- MCP 讀 `api_keys` / `users`，寫 `mcp_usage` 與 `mcp_oauth_connections`
+- 學生同一把 Classroom API Key（`vcr_sk_`）可打 LLM 與 MCP；老師可用 Personal API Key
+- MCP 透過 router 的 Key Check 驗證金鑰，不讀 router 的資料表；通過結果快取 60 秒，router 連不上或超過 3 秒時拒絕
+- MCP 寫 `mcp_usage`（新紀錄不存 `api_key_id`）與 `mcp_oauth_connections`，兩者都以 router 的 `user_id`（學生為 `student_id`）為鍵
 - Google **登入**（router／dungeon）與 Google **Calendar connect**（本服務）刻意分開
