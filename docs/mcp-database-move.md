@@ -23,9 +23,9 @@ vans-mcp-server 的 `mcp_usage` 和 `mcp_oauth_connections` 從 router 的 `neon
 |------|--------|
 | `status` | 兩邊筆數、內容是否一致（md5）、`neondb` 是否停寫。不寫入 |
 | `copy` | 用服務自己的 DDL 在目標建表（擁有者是 `vans_mcp_server_app`），複製來源。可重跑：`mcp_usage` 只補缺的 id，`mcp_oauth_connections` 在同一個 transaction 裡整張換成來源的列。identity 序號接在最大 id 後面。目標有來源沒有、或比來源新的列（代表服務已經切過去）就拒絕，什麼都不寫 |
-| `pause` | 停寫：`neondb_owner` 撤銷自己對兩張表的 `INSERT, UPDATE, DELETE, TRUNCATE`，再用 `SHARE` lock 等進行中的寫入結束。讀照常。router 不碰這兩張表。有別的角色能寫就拒絕 |
+| `pause` | 停寫：在兩張表掛上 trigger，拒絕所有 `INSERT`、`UPDATE`、`DELETE`、`TRUNCATE`（錯誤代碼 `insufficient_privilege`）。建 trigger 時會等進行中的寫入結束。讀照常。router 不碰這兩張表。只撤銷權限不夠：Neon 上 `neondb_owner` 屬於 `neon_superuser`，它有 `pg_write_all_data`，撤銷自己的權限後還是寫得進去（第一次正式搬移時發現） |
 | `final-copy` | 必須已經 `pause`；補差額，結尾兩邊完全一致才印 `READY`，否則失敗 |
-| `resume` | 撤銷 `pause`（切換前回復用） |
+| `resume` | 拿掉 `pause` 的 trigger（切換前回復用） |
 
 ## 停寫期間學生會看到什麼
 
@@ -121,7 +121,7 @@ uv run python -m vans_mcp_server.table_move pause
 ```sql
 BEGIN;
 INSERT INTO mcp_usage (tool_name, success, created_at) VALUES ('pause_check', true, now()::text);
--- 預期：ERROR: permission denied for table mcp_usage
+-- 預期：ERROR: writes paused for the vans_mcp_server move
 ROLLBACK;
 ```
 

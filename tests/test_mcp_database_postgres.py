@@ -212,6 +212,41 @@ def test_pause_stops_writes_on_neondb_and_resume_restores_them():
     assert not table_move.status(SOURCE_URL, TARGET_URL).source_paused
 
 
+SUPERUSER_URL = os.environ.get("VANS_MCP_TEST_SUPERUSER_URL", "")
+
+
+@pytest.mark.skipif(not SUPERUSER_URL, reason="VANS_MCP_TEST_SUPERUSER_URL not set")
+def test_pause_holds_when_the_owner_can_write_all_data():
+    # On Neon, neondb_owner is in neon_superuser, which holds pg_write_all_data: giving up
+    # its own table privileges does not stop it writing.
+    from vans_mcp_server import table_move
+
+    owner = _current_user(SOURCE_URL)
+    with psycopg.connect(SUPERUSER_URL, autocommit=True) as admin:
+        admin.execute(f'GRANT pg_write_all_data TO "{owner}"')
+    try:
+        source_store = _seed_source(TokenEncryptor.generate_key())
+        table_move.pause(SOURCE_URL)
+        try:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                source_store.upsert_google_tokens(user_id=9, bundle=_bundle("refresh-9"))
+            with psycopg.connect(SOURCE_URL) as conn, pytest.raises(
+                psycopg.errors.InsufficientPrivilege
+            ):
+                conn.execute(
+                    "INSERT INTO mcp_usage (tool_name, success, created_at) VALUES ('t', true, now()::text)"
+                )
+            assert source_store.get_valid_access_token(1234).refresh_token == "refresh-1234"
+            assert table_move.status(SOURCE_URL, TARGET_URL).source_paused
+        finally:
+            table_move.resume(SOURCE_URL)
+        source_store.upsert_google_tokens(user_id=9, bundle=_bundle("refresh-9"))
+        assert not table_move.status(SOURCE_URL, TARGET_URL).source_paused
+    finally:
+        with psycopg.connect(SUPERUSER_URL, autocommit=True) as admin:
+            admin.execute(f'REVOKE pg_write_all_data FROM "{owner}"')
+
+
 def test_final_copy_needs_the_pause_and_ends_with_an_exact_match():
     from vans_mcp_server import table_move
 

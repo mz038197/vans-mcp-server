@@ -57,7 +57,8 @@ COLUMNS: dict[str, tuple[str, ...]] = {
     ),
 }
 TABLES = tuple(COLUMNS)
-WRITE_PRIVILEGES = ("INSERT", "UPDATE", "DELETE", "TRUNCATE")
+PAUSE_TRIGGER = "vans_mcp_move_pause"
+PAUSE_FUNCTION = "vans_mcp_move_refuse_write"
 
 
 class MoveError(RuntimeError):
@@ -202,18 +203,16 @@ def _guard_target(source: psycopg.Connection, target: psycopg.Connection) -> Non
 
 
 def _source_paused(source: psycopg.Connection) -> bool:
-    """True when the tables' owner (the only writer) can no longer write either table."""
-    for table in TABLES:
-        owner = source.execute(
-            "SELECT tableowner FROM pg_tables WHERE schemaname = 'public' AND tablename = %s",
-            (table,),
-        ).fetchone()[0]
-        for privilege in ("INSERT", "UPDATE"):
-            if source.execute(
-                "SELECT has_table_privilege(%s, %s, %s)", (owner, f"public.{table}", privilege)
-            ).fetchone()[0]:
-                return False
-    return True
+    """True when both tables carry the enabled pause trigger."""
+    paused = source.execute(
+        """
+        SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+        WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY(%s)
+          AND t.tgname = %s AND t.tgenabled <> 'D'
+        """,
+        (list(TABLES), PAUSE_TRIGGER),
+    ).fetchone()[0]
+    return paused == len(TABLES)
 
 
 def _summarize(source: psycopg.Connection, target: psycopg.Connection, summary: Summary) -> None:
@@ -291,60 +290,57 @@ def _owned_tables(conn: psycopg.Connection) -> None:
             raise MoveError(f"connect to the source as the owner of {table}")
 
 
-def _other_writers(conn: psycopg.Connection) -> list[str]:
-    """Roles other than the owner that hold a write privilege on either table."""
-    rows = conn.execute(
-        """
-        SELECT DISTINCT c.relname, COALESCE(r.rolname, 'PUBLIC')
-        FROM pg_class c
-        CROSS JOIN LATERAL aclexplode(c.relacl) a
-        LEFT JOIN pg_roles r ON r.oid = a.grantee
-        WHERE c.relnamespace = 'public'::regnamespace
-          AND c.relname = ANY(%s)
-          AND a.grantee <> c.relowner
-          AND a.privilege_type = ANY(%s)
-        ORDER BY 1, 2
-        """,
-        (list(TABLES), list(WRITE_PRIVILEGES)),
-    ).fetchall()
-    return [f"{table}:{role}" for table, role in rows]
-
-
-def _privilege_statement(verb: str, connector: str) -> sql.Composable:
-    return sql.SQL("{verb} {privs} ON {tables} {connector} CURRENT_USER").format(
-        verb=sql.SQL(verb),
-        privs=sql.SQL(", ").join(sql.SQL(p) for p in WRITE_PRIVILEGES),
-        tables=sql.SQL(", ").join(sql.Identifier(t) for t in TABLES),
-        connector=sql.SQL(connector),
-    )
 
 
 def pause(source_url: str) -> None:
     """Stop writes to both tables on neondb; reads keep working.
 
-    The owner revokes its own write privileges, then a SHARE lock waits for any write
-    already in flight. The router does not touch these tables.
+    A trigger refuses every INSERT, UPDATE, DELETE and TRUNCATE. Revoking privileges is
+    not enough on Neon: neondb_owner is in neon_superuser, which holds pg_write_all_data.
+    CREATE TRIGGER waits for any write already in flight. The router does not touch
+    these tables.
     """
     with _connect(source_url) as source:
         _owned_tables(source)
-        others = _other_writers(source)
-        if others:
-            raise MoveError(f"other roles can write: {', '.join(others)}; revoke them first")
-        source.execute(_privilege_statement("REVOKE", "FROM"))
-        source.commit()
         source.execute(
-            sql.SQL("LOCK TABLE {} IN SHARE MODE").format(
-                sql.SQL(", ").join(sql.Identifier(t) for t in TABLES)
-            )
+            sql.SQL(
+                "CREATE OR REPLACE FUNCTION public.{fn}() RETURNS trigger LANGUAGE plpgsql AS $$"
+                " BEGIN RAISE EXCEPTION 'writes paused for the vans_mcp_server move'"
+                " USING ERRCODE = 'insufficient_privilege'; END $$"
+            ).format(fn=sql.Identifier(PAUSE_FUNCTION))
         )
+        for table in TABLES:
+            source.execute(
+                sql.SQL("DROP TRIGGER IF EXISTS {trg} ON public.{t}").format(
+                    trg=sql.Identifier(PAUSE_TRIGGER), t=sql.Identifier(table)
+                )
+            )
+            source.execute(
+                sql.SQL(
+                    "CREATE TRIGGER {trg} BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE"
+                    " ON public.{t} FOR EACH STATEMENT EXECUTE FUNCTION public.{fn}()"
+                ).format(
+                    trg=sql.Identifier(PAUSE_TRIGGER),
+                    t=sql.Identifier(table),
+                    fn=sql.Identifier(PAUSE_FUNCTION),
+                )
+            )
         source.commit()
 
 
 def resume(source_url: str) -> None:
-    """Undo pause: the owner gets its write privileges back (rollback before the switch)."""
+    """Undo pause: drop the trigger so writes work again (rollback before the switch)."""
     with _connect(source_url) as source:
         _owned_tables(source)
-        source.execute(_privilege_statement("GRANT", "TO"))
+        for table in TABLES:
+            source.execute(
+                sql.SQL("DROP TRIGGER IF EXISTS {trg} ON public.{t}").format(
+                    trg=sql.Identifier(PAUSE_TRIGGER), t=sql.Identifier(table)
+                )
+            )
+        source.execute(
+            sql.SQL("DROP FUNCTION IF EXISTS public.{fn}()").format(fn=sql.Identifier(PAUSE_FUNCTION))
+        )
         source.commit()
 
 
