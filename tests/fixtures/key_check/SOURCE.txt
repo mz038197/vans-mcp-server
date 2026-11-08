@@ -1,0 +1,6 @@
+Key Check response contract examples, copied unchanged from
+mz038197/vans_coding_router docs/contracts/key-check/ at commit
+bff594f8ae6db0f890ce528374da1716dc1a6997 (feat/key-check).
+
+The router's tests assert its real responses match these files. Copy them
+again when the router changes them; do not edit them here.

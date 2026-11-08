@@ -28,7 +28,7 @@ uv run vans-mcp-server
 - Google connect: `http://127.0.0.1:8080/connect/google/start?state=...`（由 `google_get_connect_url` 產生）
 - Discord connect: `http://127.0.0.1:8080/connect/discord/start?state=...`（由 `discord_get_connect_url` 產生；需 `DISCORD_GUILD_ID`）
 
-Production auth uses the same Neon `DATABASE_URL` as `vans-coding-router` (verify `api_keys`). For local without Neon, set `MCP_DEV_BYPASS_KEY` only (Google/Discord connect still needs `DATABASE_URL` + secrets).
+Keys are verified by the router's Key Check (`POST /internal/key-check`, router ADR 0079 and 0082): `VCR_URL` (default `https://ai.vanscoding.com`) and `VCR_SERVICE_CREDENTIAL`. Classroom API Keys and Personal API Keys both work; a pass is cached for 60 seconds, and a router that is down or slower than 3 seconds means every uncached key is refused with 「驗證服務暫時無法使用，請稍後再試」. For local work without a router, set `MCP_DEV_BYPASS_KEY` only; the server refuses to start when it is set and `FLY_APP_NAME` is present. `DATABASE_URL` still holds `mcp_usage` and the Google/Discord connections (Google/Discord connect needs it plus secrets).
 
 ## Tests
 

@@ -1,29 +1,34 @@
 from __future__ import annotations
 
-import hashlib
+import json
 import logging
 import os
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any
-
-import psycopg
-from psycopg.rows import dict_row
 
 from mcp.server.auth.middleware.auth_context import AuthContextMiddleware
-from mcp.server.auth.middleware.bearer_auth import (
-    AuthenticatedUser,
-    BearerAuthBackend,
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from starlette.authentication import (
+    AuthCredentials,
+    AuthenticationBackend,
+    AuthenticationError,
 )
 from starlette.middleware import Middleware
 from starlette.middleware.authentication import AuthenticationMiddleware
+from starlette.requests import HTTPConnection
+from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from fastmcp.server.auth import AccessToken, TokenVerifier
 
+from vans_mcp_server.key_check import (
+    KeyCheckClient,
+    KeyRefusal,
+    key_prefix,
+)
+
 logger = logging.getLogger(__name__)
 
-VCR_KEY_PREFIX = "vcr_sk_"
+DEFAULT_VCR_URL = "https://ai.vanscoding.com"
+SCOPES = ["mcp:read"]
 
 
 def normalize_api_key(api_key: str | None) -> str:
@@ -32,113 +37,32 @@ def normalize_api_key(api_key: str | None) -> str:
     return api_key.strip()
 
 
-def hash_api_key(api_key: str) -> str:
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-
-
-def _normalize_database_url(url: str) -> str:
-    if url.startswith("postgres://"):
-        return "postgresql://" + url[len("postgres://") :]
-    return url
-
-
-def _parse_dt(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    text = value.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
-@dataclass(frozen=True)
-class AuthContext:
-    user_id: int
-    email: str | None
-    name: str | None
-    api_key_id: int
-    key_prefix: str
-    role: str | None = None
-
-
-class ApiKeyStore:
-    """Minimal vcr_sk_ verification against the Vans Coding Router Neon schema."""
-
-    def __init__(self, database_url: str) -> None:
-        self.database_url = _normalize_database_url(database_url)
-
-    def verify(self, api_key: str) -> AuthContext | None:
-        api_key = normalize_api_key(api_key)
-        if not api_key:
-            return None
-        key_hash = hash_api_key(api_key)
-        now = datetime.now(timezone.utc)
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
-            row = conn.execute(
-                """
-                SELECT k.id AS api_key_id,
-                       k.key_prefix,
-                       k.enabled,
-                       k.expires_at,
-                       k.session_id,
-                       u.id AS user_id,
-                       u.email,
-                       u.name,
-                       u.role,
-                       u.status AS user_status,
-                       s.expires_at AS session_expires_at,
-                       s.status AS session_status,
-                       c.status AS class_status,
-                       c.ends_at AS class_ends_at
-                FROM api_keys k
-                JOIN users u ON u.id = k.user_id
-                LEFT JOIN class_sessions s ON s.id = k.session_id
-                LEFT JOIN classes c ON c.id = s.class_id
-                WHERE k.key_hash = %s
-                """,
-                (key_hash,),
-            ).fetchone()
-            if not row:
-                return None
-            if not bool(row["enabled"]):
-                return None
-            if row["user_status"] != "active":
-                return None
-            expires_at = _parse_dt(row["expires_at"])
-            if expires_at and now >= expires_at:
-                return None
-            session_expires_at = _parse_dt(row["session_expires_at"])
-            if row["session_id"] and session_expires_at and now >= session_expires_at:
-                return None
-            class_ends_at = _parse_dt(row["class_ends_at"])
-            if row["session_id"] and (
-                row["class_status"] != "active"
-                or (class_ends_at and now >= class_ends_at)
-            ):
-                return None
-            conn.execute(
-                "UPDATE api_keys SET last_used_at = %s WHERE id = %s",
-                (now.isoformat(), row["api_key_id"]),
-            )
-            conn.commit()
-            return AuthContext(
-                user_id=int(row["user_id"]),
-                email=row["email"],
-                name=row["name"],
-                api_key_id=int(row["api_key_id"]),
-                key_prefix=str(row["key_prefix"]),
-                role=row["role"],
-            )
+def _access_token(
+    token: str,
+    *,
+    client_id: str,
+    user_id: int,
+    kind: str,
+    class_id: int | None,
+    auth_mode: str,
+) -> AccessToken:
+    """The one place the claims the tools read are built."""
+    return AccessToken(
+        token=token,
+        client_id=client_id,
+        scopes=SCOPES,
+        expires_at=None,
+        claims={
+            "user_id": user_id,
+            "kind": kind,
+            "class_id": class_id,
+            "auth_mode": auth_mode,
+        },
+    )
 
 
 class VcrApiKeyVerifier(TokenVerifier):
-    """FastMCP auth provider: Bearer vcr_sk_ → Neon api_keys (or local bypass).
+    """FastMCP token verifier: Bearer vcr_sk_ -> router Key Check (or local bypass).
 
     Intentionally does not set ``base_url`` / resource metadata. Advertising
     ``resource_metadata`` makes VS Code / Cursor start an OAuth DCR flow and
@@ -148,68 +72,93 @@ class VcrApiKeyVerifier(TokenVerifier):
     def __init__(
         self,
         *,
-        database_url: str | None = None,
+        key_check: KeyCheckClient,
         bypass_key: str | None = None,
     ) -> None:
-        # base_url=None → no RFC 9728 resource_metadata on 401 WWW-Authenticate
+        # base_url=None -> no RFC 9728 resource_metadata on 401 WWW-Authenticate
         super().__init__(base_url=None)
-        self.store = ApiKeyStore(database_url) if database_url else None
+        self.key_check = key_check
         self.bypass_key = normalize_api_key(bypass_key) if bypass_key else ""
 
     @classmethod
     def from_env(cls) -> VcrApiKeyVerifier:
+        bypass_key = os.environ.get("MCP_DEV_BYPASS_KEY") or None
+        if bypass_key and os.environ.get("FLY_APP_NAME"):
+            raise RuntimeError(
+                "MCP_DEV_BYPASS_KEY is for local development only; "
+                "unset it on Fly (FLY_APP_NAME is set)."
+            )
         return cls(
-            database_url=os.environ.get("DATABASE_URL") or None,
-            bypass_key=os.environ.get("MCP_DEV_BYPASS_KEY") or None,
+            key_check=KeyCheckClient(
+                vcr_url=os.environ.get("VCR_URL") or DEFAULT_VCR_URL,
+                service_credential=os.environ.get("VCR_SERVICE_CREDENTIAL") or "",
+            ),
+            bypass_key=bypass_key,
+        )
+
+    async def authenticate(self, token: str | None) -> AccessToken | KeyRefusal:
+        token = normalize_api_key(token)
+        if self.bypass_key and token == self.bypass_key:
+            return _access_token(
+                token,
+                client_id="dev-bypass",
+                user_id=0,
+                kind="personal",
+                class_id=None,
+                auth_mode="bypass",
+            )
+        answer = await self.key_check.check(token)
+        if isinstance(answer, KeyRefusal):
+            logger.info(
+                "key refused (%s) for key %s", answer.reason, key_prefix(token)
+            )
+            return answer
+        return _access_token(
+            token,
+            client_id=str(answer.user_id),
+            user_id=answer.user_id,
+            kind=answer.kind,
+            class_id=answer.class_id,
+            auth_mode="key_check",
         )
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        token = normalize_api_key(token)
-        if not token:
-            return None
+        result = await self.authenticate(token)
+        return result if isinstance(result, AccessToken) else None
 
-        if self.bypass_key and token == self.bypass_key:
-            return AccessToken(
-                token=token,
-                client_id="dev-bypass",
-                scopes=["mcp:read"],
-                expires_at=None,
-                claims={
-                    "user_id": 0,
-                    "email": "dev@localhost",
-                    "name": "dev-bypass",
-                    "api_key_id": 0,
-                    "key_prefix": "dev",
-                    "auth_mode": "bypass",
-                },
-            )
 
-        if self.store is None:
-            logger.warning("DATABASE_URL unset and token is not MCP_DEV_BYPASS_KEY")
-            return None
+class KeyRefused(AuthenticationError):
+    """Carries the router's message to the 401 body."""
 
-        try:
-            ctx = self.store.verify(token)
-        except Exception:
-            logger.exception("API key verification failed")
+
+class KeyCheckAuthBackend(AuthenticationBackend):
+    def __init__(self, verifier: VcrApiKeyVerifier) -> None:
+        self.verifier = verifier
+
+    async def authenticate(self, conn: HTTPConnection):
+        header = conn.headers.get("authorization")
+        if not header or not header.lower().startswith("bearer "):
             return None
-        if ctx is None:
-            return None
-        return AccessToken(
-            token=token,
-            client_id=str(ctx.user_id),
-            scopes=["mcp:read"],
-            expires_at=None,
-            claims={
-                "user_id": ctx.user_id,
-                "email": ctx.email,
-                "name": ctx.name,
-                "api_key_id": ctx.api_key_id,
-                "key_prefix": ctx.key_prefix,
-                "role": ctx.role,
-                "auth_mode": "neon",
-            },
-        )
+        result = await self.verifier.authenticate(header[len("bearer ") :])
+        if isinstance(result, KeyRefusal):
+            raise KeyRefused(result.message)
+        return AuthCredentials(result.scopes), AuthenticatedUser(result)
+
+
+def _plain_401(message: str | None = None) -> Response:
+    """401 with no ``WWW-Authenticate``, so VS Code keeps the configured header."""
+    body: dict = {"error": "unauthorized"}
+    if message:
+        body["message"] = message
+    return Response(
+        json.dumps(body, ensure_ascii=False),
+        status_code=401,
+        media_type="application/json",
+    )
+
+
+def _refusal_response(_conn: HTTPConnection, exc: AuthenticationError) -> Response:
+    return _plain_401(str(exc))
 
 
 class RequireApiKeyMiddleware:
@@ -224,33 +173,22 @@ class RequireApiKeyMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http":
-            user = scope.get("user")
-            if not isinstance(user, AuthenticatedUser):
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": 401,
-                        "headers": [
-                            (b"content-type", b"application/json"),
-                            (b"content-length", b"27"),
-                        ],
-                    }
-                )
-                await send(
-                    {
-                        "type": "http.response.body",
-                        "body": b'{"error":"unauthorized"}',
-                    }
-                )
-                return
+        if scope["type"] == "http" and not isinstance(
+            scope.get("user"), AuthenticatedUser
+        ):
+            await _plain_401()(scope, receive, send)
+            return
         await self.app(scope, receive, send)
 
 
 def api_key_http_middleware(verifier: VcrApiKeyVerifier) -> list[Middleware]:
     """Starlette middleware stack for Bearer vcr_sk_ without OAuth discovery."""
     return [
-        Middleware(AuthenticationMiddleware, backend=BearerAuthBackend(verifier)),
+        Middleware(
+            AuthenticationMiddleware,
+            backend=KeyCheckAuthBackend(verifier),
+            on_error=_refusal_response,
+        ),
         Middleware(AuthContextMiddleware),
         Middleware(RequireApiKeyMiddleware),
     ]

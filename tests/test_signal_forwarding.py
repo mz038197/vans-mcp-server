@@ -574,8 +574,27 @@ def test_gmail_batch_inner_5xx_stays_in_result_with_no_signal(signals, monkeypat
     _assert_no_signal(receiver)
 
 
+def _key_check_answering(app_module, status: int, body: dict) -> None:
+    from vans_mcp_server.key_check import KeyCheckClient
+
+    app_module.auth.key_check = KeyCheckClient(
+        vcr_url="https://router.test",
+        service_credential="svc",
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, json=body)),
+    )
+
+
+def _key_check_contract(name: str) -> dict:
+    return json.loads(
+        (Path(__file__).resolve().parent / "fixtures" / "key_check" / name).read_text(
+            encoding="utf-8"
+        )
+    )
+
+
 def test_invalid_api_key_posts_no_signal(signals):
     app_module, receiver = signals
+    _key_check_answering(app_module, 200, _key_check_contract("refused.json"))
     with TestClient(app_module.app) as client:
         res = client.post(
             "/mcp/",
@@ -850,20 +869,28 @@ def test_a_failed_post_is_not_retried_and_is_not_another_signal(caplog, monkeypa
         receiver.close()
 
 
-def test_api_key_database_failure_posts_a_signal(signals, monkeypatch):
-    import asyncio
-
-    from vans_mcp_server.auth import VcrApiKeyVerifier
-
-    _app_module, receiver = signals
-    verifier = VcrApiKeyVerifier(database_url="postgresql://signals:signals@127.0.0.1:1/unused")
-    assert verifier.store is not None
-    monkeypatch.setattr(
-        verifier.store, "verify", MagicMock(side_effect=RuntimeError("db down"))
-    )
-    assert asyncio.run(verifier.verify_token("vcr_sk_student")) is None
+def test_key_check_outage_posts_a_signal_with_only_the_key_prefix(signals):
+    app_module, receiver = signals
+    _key_check_answering(app_module, 503, {"detail": "down"})
+    key = "vcr_sk_student_secret_value"
+    with TestClient(app_module.app) as client:
+        res = client.post(
+            "/mcp/",
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json",
+            },
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        )
+    assert res.status_code == 401
     _wait_until(lambda: len(receiver.posts) >= 1)
-    assert "API key verification failed" in receiver.posts[0]["body"]["message"]
+    time.sleep(0.2)
+    assert len(receiver.posts) == 1
+    message = receiver.posts[0]["body"]["message"]
+    assert "Key Check unavailable" in message
+    assert key[:12] in message
+    assert key not in message
     _assert_signal_body(receiver.posts[0]["body"])
 
 

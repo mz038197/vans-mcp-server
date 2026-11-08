@@ -1,23 +1,100 @@
 from __future__ import annotations
 
-import hashlib
 import importlib
+import json
+from pathlib import Path
+
+import httpx
 
 import pytest
 from starlette.testclient import TestClient
 
-from vans_mcp_server.auth import VcrApiKeyVerifier, hash_api_key, normalize_api_key
+from vans_mcp_server.auth import VcrApiKeyVerifier, normalize_api_key
+from vans_mcp_server.key_check import KeyCheckClient
 from vans_mcp_server.tools import knowledge
 
+CONTRACTS = Path(__file__).parent / "fixtures" / "key_check"
 
-def test_normalize_and_hash_key():
+
+def _key_check_answering(contract_file: str) -> KeyCheckClient:
+    body = json.loads((CONTRACTS / contract_file).read_text(encoding="utf-8"))
+    return KeyCheckClient(
+        vcr_url="https://router.test",
+        service_credential="svc",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
+    )
+
+
+def _verifier_answering(contract_file: str) -> VcrApiKeyVerifier:
+    return VcrApiKeyVerifier(key_check=_key_check_answering(contract_file))
+
+
+def test_normalize_key():
     assert normalize_api_key("  vcr_sk_abc  ") == "vcr_sk_abc"
-    assert hash_api_key("vcr_sk_abc") == hashlib.sha256(b"vcr_sk_abc").hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_classroom_claims_carry_the_student_id_kind_and_class():
+    token = await _verifier_answering("classroom-accepted.json").verify_token(
+        "vcr_sk_student"
+    )
+    assert token is not None
+    assert token.claims["user_id"] == 1234
+    assert token.claims["kind"] == "classroom"
+    assert token.claims["class_id"] == 56
+    for gone in ("email", "name", "api_key_id", "role"):
+        assert gone not in token.claims
+
+
+@pytest.mark.asyncio
+async def test_personal_claims_carry_the_user_id_and_no_class():
+    token = await _verifier_answering("personal-accepted.json").verify_token(
+        "vcr_sk_teacher"
+    )
+    assert token is not None
+    assert token.claims["user_id"] == 42
+    assert token.claims["kind"] == "personal"
+    assert token.claims["class_id"] is None
+
+
+def test_bypass_key_on_fly_refuses_to_start(monkeypatch):
+    monkeypatch.setenv("MCP_DEV_BYPASS_KEY", "vcr_sk_dev_local_only")
+    monkeypatch.setenv("FLY_APP_NAME", "vans-mcp-server")
+
+    with pytest.raises(RuntimeError, match="MCP_DEV_BYPASS_KEY"):
+        _load_app()
+    monkeypatch.delenv("FLY_APP_NAME")
+    _load_app()
+
+
+def _load_app():
+    import sys
+
+    loaded = sys.modules.get("vans_mcp_server.app")
+    if loaded is not None:
+        return importlib.reload(loaded)
+    return importlib.import_module("vans_mcp_server.app")
+
+
+def test_key_check_settings_come_from_vcr_url_and_vcr_service_credential(monkeypatch):
+    monkeypatch.delenv("MCP_DEV_BYPASS_KEY", raising=False)
+    monkeypatch.setenv("FLY_APP_NAME", "vans-mcp-server")
+    monkeypatch.setenv("VCR_URL", "https://router.example/")
+    monkeypatch.setenv("VCR_SERVICE_CREDENTIAL", "cred-123")
+    verifier = VcrApiKeyVerifier.from_env()
+    assert verifier.key_check.vcr_url == "https://router.example"
+    assert verifier.key_check.service_credential == "cred-123"
+
+    monkeypatch.delenv("VCR_URL")
+    assert VcrApiKeyVerifier.from_env().key_check.vcr_url == "https://ai.vanscoding.com"
 
 
 @pytest.mark.asyncio
 async def test_bypass_key_accepted():
-    verifier = VcrApiKeyVerifier(bypass_key="vcr_sk_dev_local_only")
+    verifier = VcrApiKeyVerifier(
+        key_check=_key_check_answering("refused.json"),
+        bypass_key="vcr_sk_dev_local_only",
+    )
     token = await verifier.verify_token("vcr_sk_dev_local_only")
     assert token is not None
     assert token.claims["auth_mode"] == "bypass"
@@ -25,7 +102,7 @@ async def test_bypass_key_accepted():
 
 @pytest.mark.asyncio
 async def test_invalid_key_rejected_without_db():
-    verifier = VcrApiKeyVerifier()
+    verifier = _verifier_answering("refused.json")
     assert await verifier.verify_token("vcr_sk_nope") is None
     assert await verifier.verify_token("") is None
 
@@ -43,6 +120,7 @@ def test_knowledge_search_and_read():
 
 def _reload_app(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MCP_DEV_BYPASS_KEY", "vcr_sk_dev_local_only")
+    monkeypatch.delenv("FLY_APP_NAME", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     import vans_mcp_server.app as app_module
 
@@ -62,6 +140,7 @@ def test_health_endpoint(monkeypatch):
 
 def test_mcp_rejects_bad_key(monkeypatch):
     app_module = _reload_app(monkeypatch)
+    app_module.auth.key_check = _verifier_answering("refused.json").key_check
     with TestClient(app_module.app) as client:
         auth = client.post(
             "/mcp/",
