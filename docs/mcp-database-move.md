@@ -1,5 +1,7 @@
 # 搬到 `vans_mcp_server` 資料庫（#100 runbook）
 
+> **已完成（2026-11-08）。** 這份是搬移當時的紀錄，搬移工具 `table_move.py` 已經刪除。需要重看時，到 git 歷史裡找（commit `e4c2bb1` 裡還有）。結果記在 vans_coding_router#100。正式環境遇到的問題：Neon 上的 `neondb_owner` 有 `pg_write_all_data`，所以停寫改用 trigger（見下面 `pause` 那一列）。
+
 vans-mcp-server 的 `mcp_usage` 和 `mcp_oauth_connections` 從 router 的 `neondb` 搬到同一個 Neon 專案 VCRouter-db 底下的 `vans_mcp_server`，服務改用只能連它的 `vans_mcp_server_app`（router ADR 0069–0071、0073、0081 第 5 步）。列原樣複製：`id`、`user_id`、密文都不變，`OAUTH_TOKEN_ENCRYPTION_KEY` 不動，學生不用重新授權。
 
 本機演練結果：[mcp-database-move-rehearsal.md](mcp-database-move-rehearsal.md)。
