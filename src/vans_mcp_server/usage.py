@@ -39,7 +39,7 @@ class UsageLogger:
                 CREATE TABLE IF NOT EXISTS mcp_usage (
                     id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                     user_id INTEGER,
-                    -- Kept for rows written before Key Check; new rows leave it NULL (ADR 0063).
+                    -- Kept for rows written before Key Check; new rows leave it NULL (router ADR 0063).
                     api_key_id INTEGER,
                     tool_name TEXT NOT NULL,
                     success BOOLEAN NOT NULL,

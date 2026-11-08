@@ -16,15 +16,17 @@ from vans_mcp_server.tools import knowledge
 CONTRACTS = Path(__file__).parent / "fixtures" / "key_check"
 
 
-def _verifier_answering(contract_file: str) -> VcrApiKeyVerifier:
+def _key_check_answering(contract_file: str) -> KeyCheckClient:
     body = json.loads((CONTRACTS / contract_file).read_text(encoding="utf-8"))
-    return VcrApiKeyVerifier(
-        key_check=KeyCheckClient(
-            vcr_url="https://router.test",
-            service_credential="svc",
-            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
-        )
+    return KeyCheckClient(
+        vcr_url="https://router.test",
+        service_credential="svc",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
     )
+
+
+def _verifier_answering(contract_file: str) -> VcrApiKeyVerifier:
+    return VcrApiKeyVerifier(key_check=_key_check_answering(contract_file))
 
 
 def test_normalize_key():
@@ -89,7 +91,10 @@ def test_key_check_settings_come_from_vcr_url_and_vcr_service_credential(monkeyp
 
 @pytest.mark.asyncio
 async def test_bypass_key_accepted():
-    verifier = VcrApiKeyVerifier(bypass_key="vcr_sk_dev_local_only")
+    verifier = VcrApiKeyVerifier(
+        key_check=_key_check_answering("refused.json"),
+        bypass_key="vcr_sk_dev_local_only",
+    )
     token = await verifier.verify_token("vcr_sk_dev_local_only")
     assert token is not None
     assert token.claims["auth_mode"] == "bypass"
@@ -97,7 +102,7 @@ async def test_bypass_key_accepted():
 
 @pytest.mark.asyncio
 async def test_invalid_key_rejected_without_db():
-    verifier = VcrApiKeyVerifier()
+    verifier = _verifier_answering("refused.json")
     assert await verifier.verify_token("vcr_sk_nope") is None
     assert await verifier.verify_token("") is None
 

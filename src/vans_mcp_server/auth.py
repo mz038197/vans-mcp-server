@@ -21,7 +21,6 @@ from fastmcp.server.auth import AccessToken, TokenVerifier
 
 from vans_mcp_server.key_check import (
     KeyCheckClient,
-    KeyIdentity,
     KeyRefusal,
     key_prefix,
 )
@@ -38,13 +37,28 @@ def normalize_api_key(api_key: str | None) -> str:
     return api_key.strip()
 
 
-def _claims_for(identity: KeyIdentity) -> dict:
-    return {
-        "user_id": identity.user_id,
-        "kind": identity.kind,
-        "class_id": identity.class_id,
-        "auth_mode": "key_check",
-    }
+def _access_token(
+    token: str,
+    *,
+    client_id: str,
+    user_id: int,
+    kind: str,
+    class_id: int | None,
+    auth_mode: str,
+) -> AccessToken:
+    """The one place the claims the tools read are built."""
+    return AccessToken(
+        token=token,
+        client_id=client_id,
+        scopes=SCOPES,
+        expires_at=None,
+        claims={
+            "user_id": user_id,
+            "kind": kind,
+            "class_id": class_id,
+            "auth_mode": auth_mode,
+        },
+    )
 
 
 class VcrApiKeyVerifier(TokenVerifier):
@@ -58,7 +72,7 @@ class VcrApiKeyVerifier(TokenVerifier):
     def __init__(
         self,
         *,
-        key_check: KeyCheckClient | None = None,
+        key_check: KeyCheckClient,
         bypass_key: str | None = None,
     ) -> None:
         # base_url=None -> no RFC 9728 resource_metadata on 401 WWW-Authenticate
@@ -85,32 +99,27 @@ class VcrApiKeyVerifier(TokenVerifier):
     async def authenticate(self, token: str | None) -> AccessToken | KeyRefusal:
         token = normalize_api_key(token)
         if self.bypass_key and token == self.bypass_key:
-            return AccessToken(
-                token=token,
+            return _access_token(
+                token,
                 client_id="dev-bypass",
-                scopes=SCOPES,
-                expires_at=None,
-                claims={
-                    "user_id": 0,
-                    "kind": "personal",
-                    "class_id": None,
-                    "auth_mode": "bypass",
-                },
+                user_id=0,
+                kind="personal",
+                class_id=None,
+                auth_mode="bypass",
             )
-        if self.key_check is None:
-            return KeyRefusal(reason="invalid", message="無效的 API 金鑰")
         answer = await self.key_check.check(token)
         if isinstance(answer, KeyRefusal):
             logger.info(
                 "key refused (%s) for key %s", answer.reason, key_prefix(token)
             )
             return answer
-        return AccessToken(
-            token=token,
+        return _access_token(
+            token,
             client_id=str(answer.user_id),
-            scopes=SCOPES,
-            expires_at=None,
-            claims=_claims_for(answer),
+            user_id=answer.user_id,
+            kind=answer.kind,
+            class_id=answer.class_id,
+            auth_mode="key_check",
         )
 
     async def verify_token(self, token: str) -> AccessToken | None:

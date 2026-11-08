@@ -1,4 +1,4 @@
-"""Key Check client: ask the router whether a vcr_sk_ key may be used (ADR 0079, 0082).
+"""Key Check client: ask the router whether a vcr_sk_ key may be used (router ADR 0079, 0082).
 
 One call returns a KeyIdentity or a KeyRefusal. The router's contract is the only
 standard; this module has no shared package behind it.
@@ -90,7 +90,7 @@ class KeyCheckClient:
 
     async def _ask_router(self, api_key: str) -> KeyIdentity | KeyRefusal:
         try:
-            # The whole call, not each httpx phase, must end within 3 seconds.
+            # The whole call, not each httpx phase, must end within TIMEOUT_SECONDS.
             async with asyncio.timeout(TIMEOUT_SECONDS):
                 async with httpx.AsyncClient(
                     transport=self.transport, timeout=TIMEOUT_SECONDS
@@ -103,7 +103,7 @@ class KeyCheckClient:
                         },
                     )
         except TimeoutError:
-            return self._unavailable(api_key, "timed out after 3 s")
+            return self._unavailable(api_key, f"timed out after {TIMEOUT_SECONDS:g} s")
         except httpx.HTTPError as exc:
             return self._unavailable(api_key, type(exc).__name__)
         if response.status_code != 200:

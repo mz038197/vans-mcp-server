@@ -32,7 +32,7 @@ notepad "$HOME\.vans-mcp-server\fly.secrets.env"
 
 ### Service Credential（Key Check）
 
-金鑰由 router 的 `POST /internal/key-check` 驗證（ADR 0079、0082）。router 那邊的產生與輪換步驟見 router 的 `guide/DEPLOYMENT.md`「Service Credential（Key Check）」。
+金鑰由 router 的 `POST /internal/key-check` 驗證（router ADR 0079、0082）。router 那邊的產生與輪換步驟見 router 的 `guide/DEPLOYMENT.md`「Service Credential（Key Check）」。
 
 1. `openssl rand -hex 32` 產生 credential。
 2. 算出 SHA-256，加進 router 的 Fly secret `VCR_SERVICE_TOKENS`：`{"<sha256>": "vans-mcp-server", ...}`，部署 router。
