@@ -121,7 +121,7 @@ def test_knowledge_search_and_read():
 def _reload_app(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MCP_DEV_BYPASS_KEY", "vcr_sk_dev_local_only")
     monkeypatch.delenv("FLY_APP_NAME", raising=False)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("VANS_MCP_DATABASE_URL", raising=False)
     import vans_mcp_server.app as app_module
 
     importlib.reload(app_module)

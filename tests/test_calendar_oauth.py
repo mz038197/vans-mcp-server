@@ -662,7 +662,7 @@ def test_connect_routes_and_not_connected_tool(monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "csecret")
     monkeypatch.setenv("SESSION_SECRET", "session-secret-for-tests")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("VANS_MCP_DATABASE_URL", raising=False)
     monkeypatch.delenv("OAUTH_TOKEN_ENCRYPTION_KEY", raising=False)
 
     import importlib
@@ -699,7 +699,7 @@ def test_callback_saves_tokens(monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "csecret")
     monkeypatch.setenv("SESSION_SECRET", "session-secret-for-tests")
     monkeypatch.setenv("OAUTH_TOKEN_ENCRYPTION_KEY", key)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("VANS_MCP_DATABASE_URL", raising=False)
 
     import importlib
 

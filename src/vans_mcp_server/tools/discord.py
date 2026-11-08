@@ -86,7 +86,7 @@ def not_connected_payload(
         payload["connect_url"] = connect_url
     else:
         payload["hint"] = (
-            "Set SESSION_SECRET, DATABASE_URL, OAUTH_TOKEN_ENCRYPTION_KEY, "
+            "Set SESSION_SECRET, VANS_MCP_DATABASE_URL, OAUTH_TOKEN_ENCRYPTION_KEY, "
             "and DISCORD_GUILD_ID on the server."
         )
     return payload

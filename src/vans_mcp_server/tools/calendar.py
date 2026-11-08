@@ -38,7 +38,7 @@ def not_connected_payload(
     else:
         payload["hint"] = (
             "Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SESSION_SECRET, "
-            "OAUTH_TOKEN_ENCRYPTION_KEY, and DATABASE_URL on the server."
+            "OAUTH_TOKEN_ENCRYPTION_KEY, and VANS_MCP_DATABASE_URL on the server."
         )
     return payload
 
@@ -72,7 +72,7 @@ def connection_status(
             "store_configured": False,
             "connect_url": connect_url,
             "error": "store_unconfigured",
-            "hint": "DATABASE_URL and OAUTH_TOKEN_ENCRYPTION_KEY are required.",
+            "hint": "VANS_MCP_DATABASE_URL and OAUTH_TOKEN_ENCRYPTION_KEY are required.",
         }
     connected = store.is_connected(user_id)
     # Always return connect_url so stale/revoked refresh tokens can be re-authorized

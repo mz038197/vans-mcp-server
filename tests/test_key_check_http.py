@@ -76,7 +76,7 @@ def app_with_router(monkeypatch):
     def build(router: FakeRouter):
         monkeypatch.delenv("MCP_DEV_BYPASS_KEY", raising=False)
         monkeypatch.delenv("FLY_APP_NAME", raising=False)
-        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("VANS_MCP_DATABASE_URL", raising=False)
         monkeypatch.setenv("DISCORD_GUILD_ID", "guild-1")
         import vans_mcp_server.app as app_module
 
