@@ -1,35 +1,30 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
 
+from vans_mcp_server.database import database_url_from_env, normalize_database_url
+
 logger = logging.getLogger(__name__)
 
 
-def _normalize_database_url(url: str) -> str:
-    if url.startswith("postgres://"):
-        return "postgresql://" + url[len("postgres://") :]
-    return url
-
-
 class UsageLogger:
-    """Record MCP tool calls. Uses Neon when DATABASE_URL is set, else stdout."""
+    """Record MCP tool calls. Uses Postgres when VANS_MCP_DATABASE_URL is set, else stdout."""
 
     def __init__(self, database_url: str | None = None) -> None:
         self.database_url = (
-            _normalize_database_url(database_url) if database_url else None
+            normalize_database_url(database_url) if database_url else None
         )
         if self.database_url:
             self._ensure_table()
 
     @classmethod
     def from_env(cls) -> UsageLogger:
-        return cls(os.environ.get("DATABASE_URL") or None)
+        return cls(database_url_from_env())
 
     def _ensure_table(self) -> None:
         assert self.database_url

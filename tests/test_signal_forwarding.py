@@ -131,7 +131,7 @@ def _reload_with_signals(monkeypatch: pytest.MonkeyPatch, receiver: _SignalsRece
     monkeypatch.setenv("VANS_SIGNALS_TOKEN", "mcp-token")
     monkeypatch.setenv("VANS_SIGNALS_SOURCE", MCP_SOURCE)
     monkeypatch.setenv("MCP_DEV_BYPASS_KEY", "vcr_sk_dev_local_only")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("VANS_MCP_DATABASE_URL", raising=False)
     for key, value in extra.items():
         monkeypatch.setenv(key, value)
     import vans_mcp_server.app as app_module
@@ -218,7 +218,7 @@ def test_blank_or_missing_source_posts_nothing(monkeypatch):
         monkeypatch.setenv("VANS_SIGNALS_TOKEN", "mcp-token")
         monkeypatch.setenv("VANS_SIGNALS_SOURCE", "   ")
         monkeypatch.setenv("MCP_DEV_BYPASS_KEY", "vcr_sk_dev_local_only")
-        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("VANS_MCP_DATABASE_URL", raising=False)
         import vans_mcp_server.app as app_module
 
         importlib.reload(app_module)
@@ -236,7 +236,7 @@ def test_blank_or_missing_url_or_token_posts_nothing(monkeypatch):
         monkeypatch.setenv("VANS_SIGNALS_TOKEN", "mcp-token")
         monkeypatch.delenv("VANS_SIGNALS_URL", raising=False)
         monkeypatch.setenv("MCP_DEV_BYPASS_KEY", "vcr_sk_dev_local_only")
-        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("VANS_MCP_DATABASE_URL", raising=False)
         import vans_mcp_server.app as app_module
 
         importlib.reload(app_module)

@@ -15,6 +15,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 
 from vans_mcp_server.auth import VcrApiKeyVerifier, api_key_http_middleware
+from vans_mcp_server.database import warn_if_router_database_url
 from vans_mcp_server.errors import ToolArgumentError
 from vans_mcp_server.oauth.discord_connect import DiscordConnectState
 from vans_mcp_server.oauth.google import GoogleOAuthService
@@ -33,6 +34,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("vans_mcp_server")
 _signal_forwarder = start_signal_forwarding()
+warn_if_router_database_url(logger)
 
 usage = UsageLogger.from_env()
 auth = VcrApiKeyVerifier.from_env()
@@ -1937,6 +1939,7 @@ async def health(_request: Request) -> JSONResponse:
             "google_oauth_configured": bool(
                 google_oauth is not None and google_oauth.is_configured()
             ),
+            "database_configured": usage.database_url is not None,
             "oauth_store_configured": oauth_store is not None,
             "discord_guild_configured": discord_tools.guild_configured(),
             "discord_connect_configured": bool(
@@ -1975,7 +1978,7 @@ async def connect_google_callback(request: Request) -> HTMLResponse:
     if oauth_store is None:
         return HTMLResponse(
             "<h1>OAuth store not configured</h1>"
-            "<p>DATABASE_URL and OAUTH_TOKEN_ENCRYPTION_KEY are required.</p>",
+            "<p>VANS_MCP_DATABASE_URL and OAUTH_TOKEN_ENCRYPTION_KEY are required.</p>",
             status_code=503,
         )
 
@@ -2055,7 +2058,7 @@ async def connect_discord_start(request: Request) -> HTMLResponse:
     if oauth_store is None:
         return HTMLResponse(
             "<h1>OAuth store not configured</h1>"
-            "<p>DATABASE_URL and OAUTH_TOKEN_ENCRYPTION_KEY are required.</p>",
+            "<p>VANS_MCP_DATABASE_URL and OAUTH_TOKEN_ENCRYPTION_KEY are required.</p>",
             status_code=503,
         )
     state = request.query_params.get("state") or ""
@@ -2114,7 +2117,7 @@ async def connect_discord_submit(request: Request) -> HTMLResponse:
     if oauth_store is None:
         return HTMLResponse(
             "<h1>OAuth store not configured</h1>"
-            "<p>DATABASE_URL and OAUTH_TOKEN_ENCRYPTION_KEY are required.</p>",
+            "<p>VANS_MCP_DATABASE_URL and OAUTH_TOKEN_ENCRYPTION_KEY are required.</p>",
             status_code=503,
         )
 

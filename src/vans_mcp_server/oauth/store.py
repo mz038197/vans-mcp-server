@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -9,6 +8,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
+from vans_mcp_server.database import database_url_from_env, normalize_database_url
 from vans_mcp_server.errors import ToolArgumentError
 from vans_mcp_server.oauth.crypto import TokenEncryptor
 from vans_mcp_server.oauth.google import GoogleOAuthService, GoogleTokenBundle
@@ -17,12 +17,6 @@ logger = logging.getLogger(__name__)
 
 PROVIDER_GOOGLE = "google"
 PROVIDER_DISCORD_BOT = "discord_bot"
-
-
-def _normalize_database_url(url: str) -> str:
-    if url.startswith("postgres://"):
-        return "postgresql://" + url[len("postgres://") :]
-    return url
 
 
 @dataclass
@@ -45,6 +39,29 @@ class StoredDiscordBotConnection:
     bot_user_id: str | None
 
 
+def create_connections_table(database_url: str) -> None:
+    """Create mcp_oauth_connections if missing; the connecting role owns it."""
+    with psycopg.connect(database_url) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mcp_oauth_connections (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                refresh_token_enc TEXT,
+                access_token_enc TEXT,
+                expires_at TEXT,
+                scopes TEXT,
+                google_sub TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (user_id, provider)
+            )
+            """
+        )
+        conn.commit()
+
+
 class OAuthConnectionStore:
     """Neon-backed per-user OAuth/bot tokens (encrypted at rest)."""
 
@@ -54,39 +71,21 @@ class OAuthConnectionStore:
         encryptor: TokenEncryptor,
         oauth: GoogleOAuthService | None = None,
     ) -> None:
-        self.database_url = _normalize_database_url(database_url)
+        self.database_url = normalize_database_url(database_url)
         self.encryptor = encryptor
         self.oauth = oauth
         self._ensure_table()
 
     @classmethod
     def from_env(cls, oauth: GoogleOAuthService | None = None) -> OAuthConnectionStore | None:
-        database_url = os.environ.get("DATABASE_URL") or ""
+        database_url = database_url_from_env()
         encryptor = TokenEncryptor.from_env()
-        if not database_url.strip() or encryptor is None:
+        if database_url is None or encryptor is None:
             return None
         return cls(database_url, encryptor, oauth=oauth)
 
     def _ensure_table(self) -> None:
-        with psycopg.connect(self.database_url) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS mcp_oauth_connections (
-                    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                    user_id INTEGER NOT NULL,
-                    provider TEXT NOT NULL,
-                    refresh_token_enc TEXT,
-                    access_token_enc TEXT,
-                    expires_at TEXT,
-                    scopes TEXT,
-                    google_sub TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE (user_id, provider)
-                )
-                """
-            )
-            conn.commit()
+        create_connections_table(self.database_url)
 
     def is_connected(self, user_id: int, provider: str = PROVIDER_GOOGLE) -> bool:
         if provider == PROVIDER_DISCORD_BOT:

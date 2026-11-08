@@ -17,7 +17,7 @@ notepad "$HOME\.vans-mcp-server\fly.secrets.env"
 
 | Secret | 說明 |
 |--------|------|
-| `DATABASE_URL` | `mcp_usage` 與 `mcp_oauth_connections` 所在的 Neon（目前仍是 router 的 `neondb`，#100 會搬走） |
+| `VANS_MCP_DATABASE_URL` | `mcp_usage` 與 `mcp_oauth_connections` 所在的 Neon：VCRouter-db 的 `vans_mcp_server`，角色 `vans_mcp_server_app`（router ADR 0071、0073）。從 `neondb` 搬過來的步驟見 [mcp-database-move.md](mcp-database-move.md) |
 | `VCR_SERVICE_CREDENTIAL` | 呼叫 router Key Check 的 Service Credential（`openssl rand -hex 32`） |
 | `GOOGLE_CLIENT_ID` | Google OAuth Client（可與 router 共用） |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth Client secret |
@@ -27,6 +27,8 @@ notepad "$HOME\.vans-mcp-server\fly.secrets.env"
 `PUBLIC_URL` 與 `DISCORD_GUILD_ID` 放在 `fly.toml` 的 `[env]`，不要設成 Fly secret。
 
 `VCR_URL` 預設 `https://ai.vanscoding.com`，正式環境不用設定。
+
+router 的 `DATABASE_URL` 不再讀取，搬移完成後從 Fly secrets 移除（還在的話啟動時記一筆 WARNING）。
 
 **不要**在 production 設定 `MCP_DEV_BYPASS_KEY`：有 `FLY_APP_NAME`（每台 Fly 機器都有）又設定它時，服務拒絕啟動。
 
@@ -91,7 +93,7 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-fly.ps1 -SecretsOnly
 2. 學生：Discord Developer Portal 建立 Bot → Agent 呼叫 `discord_get_connect_url` → 瀏覽器貼上 Application ID + Bot Token（**勿貼進聊天**）→ 用成功頁的 invite 連結把 Bot 加入課堂伺服器
 3. 可用 `discord_list_channels` / `discord_read_messages` / `discord_send_message`（send 需 `confirm=true`）
 4. 若要讀訊息內文：在 Developer Portal 開啟 Bot 的 **Message Content Intent**
-5. 結課：請學生在 Developer Portal **Reset Token**；可另清 Neon 中 `provider=discord_bot` 列
+5. 結課：請學生在 Developer Portal **Reset Token**；可另清 `vans_mcp_server` 中 `provider=discord_bot` 列
 
 ## 部署
 
@@ -129,5 +131,5 @@ curl https://mcp.vanscoding.com/health
 - App 分開：`vans-coding-router`（`ai.vanscoding.com`）與 `vans-mcp-server`（`mcp.vanscoding.com`）
 - 學生同一把 Classroom API Key（`vcr_sk_`）可打 LLM 與 MCP；老師可用 Personal API Key
 - MCP 透過 router 的 Key Check 驗證金鑰，不讀 router 的資料表；通過結果快取 60 秒，router 連不上或超過 3 秒時拒絕
-- MCP 寫 `mcp_usage`（新紀錄不存 `api_key_id`）與 `mcp_oauth_connections`，兩者都以 router 的 `user_id`（學生為 `student_id`）為鍵
+- MCP 寫 `mcp_usage`（新紀錄不存 `api_key_id`）與 `mcp_oauth_connections`，兩者都以 router 的 `user_id`（學生為 `student_id`）為鍵，放在自己的 `vans_mcp_server` 資料庫；`vans_mcp_server_app` 連不上 router 的 `neondb`
 - Google **登入**（router／dungeon）與 Google **Calendar connect**（本服務）刻意分開
