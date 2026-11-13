@@ -181,6 +181,57 @@ class RequireApiKeyMiddleware:
         await self.app(scope, receive, send)
 
 
+OAUTH_ENTRY_PATH = "/mcp-oauth"
+OAUTH_SCOPE = "classroom"
+
+
+def protected_resource_metadata_path(entry_path: str = OAUTH_ENTRY_PATH) -> str:
+    """RFC 9728 path-inserted well-known URI for one resource path."""
+    return "/.well-known/oauth-protected-resource" + entry_path
+
+
+def protected_resource_metadata(
+    *, public_url: str, vcr_url: str, entry_path: str = OAUTH_ENTRY_PATH
+) -> dict:
+    """RFC 9728 metadata naming the router as the authorization server (ADR 0004)."""
+    return {
+        "resource": public_url.rstrip("/") + entry_path,
+        "authorization_servers": [vcr_url.rstrip("/")],
+        "scopes_supported": [OAUTH_SCOPE],
+        "bearer_methods_supported": ["header"],
+    }
+
+
+class OAuthChallengeOn401:
+    """Wrap the MCP app so its 401 challenges with RFC 9728 resource metadata.
+
+    Only mounted at ``/mcp-oauth`` for MiTAC Agent Builder; ``/mcp`` keeps the
+    plain 401 so VS Code / Cursor keep their static Bearer header (ADR 0004).
+    """
+
+    def __init__(self, app: ASGIApp, *, metadata_url: str) -> None:
+        self.app = app
+        self.challenge = f'Bearer resource_metadata="{metadata_url}"'.encode("latin-1")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_challenge(message) -> None:
+            if message["type"] == "http.response.start" and message["status"] == 401:
+                headers = [
+                    (k, v)
+                    for k, v in message.get("headers", [])
+                    if k.lower() != b"www-authenticate"
+                ]
+                headers.append((b"www-authenticate", self.challenge))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_challenge)
+
+
 def api_key_http_middleware(verifier: VcrApiKeyVerifier) -> list[Middleware]:
     """Starlette middleware stack for Bearer vcr_sk_ without OAuth discovery."""
     return [
