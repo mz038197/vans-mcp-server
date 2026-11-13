@@ -14,7 +14,14 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 
-from vans_mcp_server.auth import VcrApiKeyVerifier, api_key_http_middleware
+from vans_mcp_server.auth import (
+    OAUTH_ENTRY_PATH,
+    OAuthChallengeOn401,
+    VcrApiKeyVerifier,
+    api_key_http_middleware,
+    protected_resource_metadata,
+    protected_resource_metadata_path,
+)
 from vans_mcp_server.database import warn_if_router_database_url
 from vans_mcp_server.errors import ToolArgumentError
 from vans_mcp_server.oauth.discord_connect import DiscordConnectState
@@ -1928,6 +1935,16 @@ def discord_send_message(
         _record("discord_send_message", ok, timer.latency_ms, err)
 
 
+async def mcp_oauth_metadata(_request: Request) -> JSONResponse:
+    """RFC 9728 metadata for /mcp-oauth only; /mcp advertises nothing (ADR 0004)."""
+    return JSONResponse(
+        protected_resource_metadata(
+            public_url=_public_url(),
+            vcr_url=auth.key_check.vcr_url,
+        )
+    )
+
+
 async def health(_request: Request) -> JSONResponse:
     mode = "key_check_with_dev_bypass" if auth.bypass_key else "key_check"
     return JSONResponse(
@@ -2204,7 +2221,20 @@ app = Starlette(
         Route("/connect/google/callback", connect_google_callback, methods=["GET"]),
         Route("/connect/discord/start", connect_discord_start, methods=["GET"]),
         Route("/connect/discord/submit", connect_discord_submit, methods=["POST"]),
+        Route(
+            protected_resource_metadata_path(),
+            mcp_oauth_metadata,
+            methods=["GET"],
+        ),
         Mount("/mcp", app=mcp_app),
+        # Same MCP app and same key check; only the 401 differs (ADR 0004).
+        Mount(
+            OAUTH_ENTRY_PATH,
+            app=OAuthChallengeOn401(
+                mcp_app,
+                metadata_url=_public_url() + protected_resource_metadata_path(),
+            ),
+        ),
     ],
     lifespan=mcp_app.lifespan,
 )

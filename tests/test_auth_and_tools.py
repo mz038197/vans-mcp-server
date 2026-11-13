@@ -189,6 +189,84 @@ def test_mcp_401_does_not_advertise_oauth_metadata(monkeypatch):
         assert "www-authenticate" not in {k.lower() for k in res.headers.keys()}
 
 
+_INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2024-11-05",
+        "capabilities": {},
+        "clientInfo": {"name": "test", "version": "0"},
+    },
+}
+_MCP_HEADERS = {
+    "Accept": "application/json, text/event-stream",
+    "Content-Type": "application/json",
+}
+
+
+def test_mcp_oauth_401_challenges_with_resource_metadata(monkeypatch):
+    """Agent Builder entry: 401 points at RFC 9728 metadata (ADR 0004)."""
+    monkeypatch.setenv("PUBLIC_URL", "https://mcp.vanscoding.com")
+    app_module = _reload_app(monkeypatch)
+    with TestClient(app_module.app) as client:
+        res = client.post("/mcp-oauth/", headers=_MCP_HEADERS, json=_INITIALIZE)
+        assert res.status_code == 401
+        assert res.headers["www-authenticate"] == (
+            'Bearer resource_metadata="https://mcp.vanscoding.com'
+            '/.well-known/oauth-protected-resource/mcp-oauth"'
+        )
+
+
+def test_mcp_oauth_refused_key_also_challenges(monkeypatch):
+    """An expired Classroom API Key must send Agent Builder back to linking."""
+    app_module = _reload_app(monkeypatch)
+    app_module.auth.key_check = _verifier_answering("refused.json").key_check
+    with TestClient(app_module.app) as client:
+        res = client.post(
+            "/mcp-oauth/",
+            headers={**_MCP_HEADERS, "Authorization": "Bearer vcr_sk_expired"},
+            json=_INITIALIZE,
+        )
+        assert res.status_code == 401
+        assert "resource_metadata=" in res.headers["www-authenticate"]
+
+
+def test_mcp_oauth_metadata_names_the_router(monkeypatch):
+    monkeypatch.setenv("PUBLIC_URL", "https://mcp.vanscoding.com")
+    monkeypatch.setenv("VCR_URL", "https://ai.vanscoding.com")
+    app_module = _reload_app(monkeypatch)
+    with TestClient(app_module.app) as client:
+        res = client.get("/.well-known/oauth-protected-resource/mcp-oauth")
+        assert res.status_code == 200
+        assert res.json() == {
+            "resource": "https://mcp.vanscoding.com/mcp-oauth",
+            "authorization_servers": ["https://ai.vanscoding.com"],
+            "scopes_supported": ["classroom"],
+            "bearer_methods_supported": ["header"],
+        }
+
+
+def test_mcp_has_no_resource_metadata(monkeypatch):
+    """/mcp must stay undiscoverable so VS Code keeps its static key."""
+    app_module = _reload_app(monkeypatch)
+    with TestClient(app_module.app) as client:
+        assert client.get("/.well-known/oauth-protected-resource/mcp").status_code == 404
+        assert client.get("/.well-known/oauth-protected-resource").status_code == 404
+
+
+def test_mcp_oauth_accepts_the_same_keys_as_mcp(monkeypatch):
+    app_module = _reload_app(monkeypatch)
+    with TestClient(app_module.app) as client:
+        res = client.post(
+            "/mcp-oauth/",
+            headers={**_MCP_HEADERS, "Authorization": "Bearer vcr_sk_dev_local_only"},
+            json=_INITIALIZE,
+        )
+        assert res.status_code == 200
+        assert "www-authenticate" not in {k.lower() for k in res.headers.keys()}
+
+
 def test_mcp_accepts_bypass_key(monkeypatch):
     app_module = _reload_app(monkeypatch)
     with TestClient(app_module.app) as client:
